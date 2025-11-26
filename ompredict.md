@@ -1260,3 +1260,627 @@
 > 模型对线上模块的实时数据进行打分，输出未来发生故障的概率，从而驱动预测性维护。
 
 正是这一整套环环相扣的原理，让我们能够从看似随机的硬件故障中，找到确定性的规律，实现从“救火”到“防火”的飞跃。
+
+
+# 十二. 现在已经有了光模块故障预测的技术方案，包括基本的数据格式，特征抽取方法以及模型训练方法，我希望跑通整个流程，但缺乏相应的数据，所以我想构建一些模型数据以快速完成预测算法原型。根据以上需求设计满足故障预测的数据和模拟数据生成程序
+
+这是一个非常务实的需求。对于AIOps项目，**“冷启动”**（即在没有足够历史故障数据的情况下开始模型开发）是常态。构建高质量的模拟数据（Synthetic Data）是验证算法原型、打通ETL流程、甚至预训练模型的最佳捷径。
+
+为了让你快速跑通整个流程，我为你设计了一套**基于物理规则和统计分布**的数据生成方案，并提供了一个完整的Python脚本。
+
+### **一、 模拟数据生成策略 (Simulation Strategy)**
+
+我们需要生成“**真实得足以骗过模型**”的数据。不能只是随机数，必须包含以下逻辑：
+
+1.  **成对生成 (Link-Based):** 必须成对生成（Host端模块 + Net端模块），因为`Local Rx`强依赖于`Peer Tx`。
+2.  **物理关联 (Physics Correlations):**
+    *   `SNR` 与 `Rx Power` 正相关。
+    *   `FEC Error` 与 `SNR` 呈指数级负相关（SNR低到一定程度，FEC才会爆炸）。
+    *   `Tx Bias` 与 `Tx Power` 在老化场景下呈负相关（Bias升高以维持Power）。
+    *   `Temperature` 呈现昼夜周期性波动。
+3.  **场景注入 (Scenario Injection):** 我们将生成三种类型的样本：
+    *   **Healthy (健康):** 平稳波动，无趋势。
+    *   **Gradual Aging (渐进老化):** 关键指标（如Tx Bias, Rx Power）随时间线性或指数恶化，最终触发阈值。
+    *   **Abrupt Failure (突发故障):** 指标正常，突然在某点中断（断纤）。
+
+### **二、 数据字段映射**
+
+我们将生成符合之前定义的**“最终版”**格式的数据。为了简化原型，我们将时间窗口 `W` 设为 **24小时**，预测窗口 `H` 设为 **7天**。
+
+### **三、 Python 模拟数据生成器**
+
+这个脚本使用了 `pandas` 和 `numpy`，模拟了物理链路的行为，并自动完成了特征工程（Feature Engineering）和打标签（Labeling）。
+
+```python
+import pandas as pd
+import numpy as np
+import uuid
+from datetime import datetime, timedelta
+import random
+
+# ==========================================
+# 1. 配置参数
+# ==========================================
+NUM_LINKS = 20           # 模拟多少条链路 (即 40 个模块)
+DURATION_DAYS = 60       # 模拟时长 (天)
+FREQ = '1H'              # 采样频率 (为了原型跑得快，用1小时，生产环境用1分钟)
+WINDOW_SIZE = 24         # 滑动窗口大小 (24个采样点 = 24小时)
+PREDICT_WINDOW = 7 * 24  # 预测窗口 (7天)
+
+# 规格基线
+SPEC_RX_MIN = -14.0
+SPEC_RX_MAX = 2.0
+SPEC_TEMP_MAX = 75.0
+
+# ==========================================
+# 2. 物理模拟核心函数
+# ==========================================
+
+def generate_base_series(days, freq):
+    """生成基础的时间序列框架"""
+    date_rng = pd.date_range(start='2024-01-01', periods=days*24, freq=freq)
+    return pd.DataFrame(index=date_rng)
+
+def simulate_temperature(n):
+    """模拟温度：包含昼夜周期波动和随机噪声"""
+    x = np.linspace(0, n/24 * 2 * np.pi, n)
+    base = 45 + 5 * np.sin(x)  # 45度基线，5度波动
+    noise = np.random.normal(0, 1.5, n)
+    return base + noise
+
+def simulate_module_lifecycle(df, scenario='healthy'):
+    """
+    模拟单个模块的生命周期
+    scenario: 'healthy', 'tx_aging' (发射老化), 'rx_dirty' (接收脏污/光衰), 'sudden_cut' (突发断纤)
+    """
+    n = len(df)
+    
+    # --- 1. 基础物理量模拟 ---
+    
+    # 温度 & 电压 (主要受环境影响)
+    df['temp'] = simulate_temperature(n)
+    df['voltage'] = np.random.normal(3.3, 0.05, n)
+    
+    # Tx Power (发送光功率) - 初始值 -2 dBm
+    tx_power_base = -2.0 + np.random.normal(0, 0.2, n)
+    
+    # Tx Bias (偏置电流) - 初始值 40 mA
+    tx_bias_base = 40.0 + (df['temp'] - 45) * 0.1 + np.random.normal(0, 0.5, n) # 温度略微影响偏置
+
+    # Rx Path Loss (光路损耗) - 初始损耗 3 dB
+    path_loss = 3.0 + np.random.normal(0, 0.1, n)
+
+    # --- 2. 场景注入 (故障模拟) ---
+    
+    # 故障发生点：随机在最后 30% 的时间内
+    failure_point = random.randint(int(n * 0.7), n - 2)
+    is_failure = False
+    
+    if scenario == 'tx_aging':
+        # 激光器老化：Bias 逐渐升高，Tx Power 在后期开始下降
+        aging_steps = n - failure_point + 200 # 提前开始老化
+        aging_ramp = np.linspace(0, 40, aging_steps) # Bias 升高 40mA
+        
+        # 应用老化
+        start_idx = max(0, n - aging_steps)
+        df.iloc[start_idx:, df.columns.get_loc('temp')] += 0 # 占位
+        
+        # Bias 升高
+        bias_drift = np.zeros(n)
+        bias_drift[start_idx:] = aging_ramp[:n-start_idx]
+        tx_bias_base += bias_drift
+        
+        # Tx Power 最终下降 (当 Bias 超过一定阈值后)
+        power_drop = np.zeros(n)
+        drop_start = start_idx + int(aging_steps * 0.8)
+        if drop_start < n:
+            power_drop[drop_start:] = np.linspace(0, 10, n-drop_start) # 功率下降10dB
+        tx_power_base -= power_drop
+        is_failure = True
+
+    elif scenario == 'rx_dirty':
+        # 接口脏污：Path Loss 逐渐增加
+        dirty_steps = n - failure_point + 100
+        loss_ramp = np.linspace(0, 15, dirty_steps) # 损耗增加15dB
+        
+        start_idx = max(0, n - dirty_steps)
+        loss_drift = np.zeros(n)
+        loss_drift[start_idx:] = loss_ramp[:n-start_idx]
+        path_loss += loss_drift
+        is_failure = True
+
+    elif scenario == 'sudden_cut':
+        # 突发断纤：Rx Power 瞬间掉到底
+        path_loss[failure_point:] = 100 # 极大损耗
+        is_failure = True
+
+    # 保存原始物理量
+    df['tx_power'] = tx_power_base
+    df['tx_bias'] = tx_bias_base
+    df['path_loss'] = path_loss
+    df['scenario'] = scenario
+    df['failure_idx'] = failure_point if is_failure else -1
+    
+    return df
+
+# ==========================================
+# 3. 链路成对组装与特征计算
+# ==========================================
+
+def build_link_dataset():
+    all_snapshots = []
+    
+    scenarios = ['healthy', 'healthy', 'tx_aging', 'rx_dirty', 'sudden_cut']
+    
+    print(f"开始生成 {NUM_LINKS} 条链路数据 ({DURATION_DAYS} 天/条)...")
+    
+    for i in range(NUM_LINKS):
+        # 随机分配一种场景
+        scenario = random.choice(scenarios)
+        
+        # 生成两个模块：Host 和 Net
+        # 注意：Peer Tx 影响 Local Rx
+        
+        # 1. 生成 Host 模块基础数据
+        df_host = generate_base_series(DURATION_DAYS, FREQ)
+        df_host = simulate_module_lifecycle(df_host, scenario if scenario != 'rx_dirty' else 'healthy') 
+        # 如果是 RX 脏污，通常是单侧的，这里假设 Host 侧发射正常，但网络侧接收有问题，或者反之。
+        # 为简化，假设 scenario 描述的是 Link 的主要问题。
+        
+        # 2. 生成 Net 模块基础数据
+        df_net = generate_base_series(DURATION_DAYS, FREQ)
+        # 对端稍微有点不同步
+        df_net = simulate_module_lifecycle(df_net, 'healthy' if scenario == 'tx_aging' else scenario) 
+        
+        # 3. 计算交互指标 (Rx Power, SNR, FEC)
+        # Host Rx = Net Tx - Path Loss
+        df_host['rx_power'] = df_net['tx_power'] - df_host['path_loss']
+        df_net['rx_power'] = df_host['tx_power'] - df_net['path_loss'] # 假设双向损耗一致
+        
+        # SNR 模型: 基于 Rx Power (简单物理模型)
+        # Rx > -10dBm: SNR ~ 30dB; Rx < -20dBm: SNR ~ 5dB
+        def calc_snr(rx_pow):
+            snr = 30 + (rx_pow - (-10)) * 1.5 
+            return np.clip(snr + np.random.normal(0, 1, len(rx_pow)), 0, 35)
+            
+        df_host['snr'] = calc_snr(df_host['rx_power'])
+        df_net['snr'] = calc_snr(df_net['rx_power'])
+        
+        # FEC Error 模型: 基于 SNR 的指数模型
+        # SNR < 12dB 时 FEC 爆炸
+        def calc_fec(snr):
+            fec = 100000 * np.exp(-0.5 * snr) 
+            # 增加一些随机突发
+            noise = np.random.gamma(2, 2, len(snr)) 
+            return np.round(fec * noise)
+            
+        df_host['fec_rate'] = calc_fec(df_host['snr'])
+        df_net['fec_rate'] = calc_fec(df_net['snr'])
+
+        # 状态位生成
+        df_host['rx_los'] = (df_host['rx_power'] < -20).astype(int)
+        df_host['tx_fault'] = ((df_host['tx_bias'] > 80) | (df_host['temp'] > 85)).astype(int)
+        
+        # --- 4. 特征工程 (滑动窗口) ---
+        # 模拟 ETL 过程：计算过去 24H 的统计量
+        
+        feature_cols = ['rx_power', 'tx_power', 'tx_bias', 'temp', 'snr', 'fec_rate']
+        
+        # 只需要 Host 侧的数据作为训练样本 (模拟我们在 Host 侧做预测)
+        # 也可以做 Net 侧，这里演示 Host 侧
+        df = df_host.copy()
+        
+        # 加入对端特征 (Peer Features)
+        df['peer_tx_power'] = df_net['tx_power']
+        
+        for col in feature_cols:
+            # 均值
+            df[f'local_{col}_mean_W'] = df[col].rolling(window=WINDOW_SIZE).mean()
+            # 标准差
+            df[f'local_{col}_stddev_W'] = df[col].rolling(window=WINDOW_SIZE).std()
+            # 趋势 (简单用 当前 - 24小时前，生产环境可用 slope)
+            df[f'local_{col}_trend_W'] = df[col] - df[col].shift(WINDOW_SIZE)
+        
+        # 对端特征
+        df[f'peer_tx_power_mean_W'] = df['peer_tx_power'].rolling(window=WINDOW_SIZE).mean()
+
+        # 事件计数 (Flap Count)
+        df['local_rx_los_flap_count_W'] = df['rx_los'].rolling(window=WINDOW_SIZE).sum() # 简化，直接算为1的时间点
+        
+        # --- 5. 打标签 (Future Labels) ---
+        # 预测未来 H (7天) 内是否发生 Rx LOS 或 Tx Fault
+        
+        indexer = pd.api.indexers.FixedForwardWindowIndexer(window_size=PREDICT_WINDOW)
+        
+        # 只要未来窗口内 Rx LOS > 0，标签即为 1
+        df['target_rx_los_event_H'] = df['rx_los'].rolling(window=indexer).max()
+        df['target_tx_fault_event_H'] = df['tx_fault'].rolling(window=indexer).max()
+        
+        # 构造元数据
+        df['snapshot_uuid'] = [uuid.uuid4().hex for _ in range(len(df))]
+        df['module_serial_number'] = f"SN-HOST-{i:04d}"
+        df['device_id'] = f"gpu-node-{i}"
+        
+        # 清理 NaN (由于 rolling 产生的)
+        df_clean = df.dropna().iloc[::4] # 降采样，每4小时取一个快照，减少数据量
+        
+        all_snapshots.append(df_clean)
+
+    final_df = pd.concat(all_snapshots, ignore_index=True)
+    return final_df
+
+# ==========================================
+# 4. 执行生成
+# ==========================================
+
+if __name__ == "__main__":
+    data = build_link_dataset()
+    
+    # 筛选列，匹配我们的“最终数据格式”
+    cols_to_keep = [
+        'snapshot_uuid', 'module_serial_number', 'device_id',
+        'local_rx_power_mean_W', 'local_rx_power_stddev_W', 'local_rx_power_trend_W',
+        'local_tx_bias_mean_W', 'local_tx_bias_trend_W',
+        'local_snr_mean_W', 'local_fec_rate_mean_W',
+        'peer_tx_power_mean_W',
+        'local_rx_los_flap_count_W',
+        'target_rx_los_event_H', 'target_tx_fault_event_H'
+    ]
+    
+    # 稍微处理下列名以完全匹配（此处取子集演示）
+    output_data = data[cols_to_keep]
+    
+    print(f"\n生成完成！数据集形状: {output_data.shape}")
+    print("\n数据样例 (Normal):")
+    print(output_data[output_data['target_rx_los_event_H'] == 0].head(3))
+    print("\n数据样例 (Failures):")
+    print(output_data[output_data['target_rx_los_event_H'] == 1].head(3))
+    
+    # 保存为 CSV 供模型训练使用
+    output_data.to_csv('optical_module_synthetic_data.csv', index=False)
+    print("\n已保存至 optical_module_synthetic_data.csv")
+```
+
+### **四、 代码逻辑与数据说明**
+
+1.  **物理仿真 (Physics Simulation):**
+    *   我没有直接生成特征，而是先生成了底层的物理指标 (`rx_power`, `snr`, `temp` 等)。
+    *   通过 `simulate_module_lifecycle` 函数，我注入了三种真实的故障模式：
+        *   **Tx Aging:** 偏置电流 (`tx_bias`) 随时间线性增加，直到超过阈值触发 `Tx Fault`。
+        *   **Rx Dirty:** 光路损耗 (`path_loss`) 增加，导致 `Rx Power` 和 `SNR` 下降，最终导致 `FEC` 暴涨和 `Rx LOS`。
+        *   **Sudden Cut:** 在随机时间点直接将光路损耗设为最大值。
+    *   `calc_snr` 和 `calc_fec` 函数模拟了信号衰减导致误码率指数上升的物理现象。
+
+2.  **特征工程 (ETL Simulation):**
+    *   利用 `rolling(window=24)` 模拟了我们在之前的方案中设计的滑动窗口。
+    *   计算了 `mean`, `stddev`, `trend` (这里简化为当前值减去24小时前的值)。
+    *   这完全模拟了你在线上ETL会做的事情。
+
+3.  **自动打标签 (Label Generation):**
+    *   使用了 `FixedForwardWindowIndexer` 进行**前向**滚动。
+    *   这模拟了我们在训练阶段的“上帝视角”，能够看到当前快照之后7天内是否发生了 `rx_los` 或 `tx_fault`。
+
+### **五、 如何使用这份数据**
+
+你可以直接运行这段代码，它会生成一个 `optical_module_synthetic_data.csv` 文件。
+
+接下来，你可以使用这个CSV文件进行以下工作：
+1.  **数据探索 (EDA):** 画出 `local_tx_bias_trend_W` 和 `target_tx_fault_event_H` 的散点图，你会看到明显的相关性。
+2.  **模型训练:** 直接用 XGBoost 或 LightGBM 加载这个 CSV，`target_*` 列作为标签，其他 `local_*`, `peer_*` 列作为特征。
+3.  **验证方案:** 观察模型能否通过 `tx_bias` 的上升趋势预测出未来的 `Tx Fault`，能否通过 `snr` 的下降预测出 `Rx LOS`。
+
+这份模拟数据虽然是合成的，但它保留了光模块故障最核心的**物理因果关系**，非常适合用来验证你的算法原型。
+
+# 十三.  该方案遗漏了原始数据生成的过程，按照模拟原始数据，再从模拟数据生成特征数据的全过程给出方案和代码
+
+您的需求非常清晰。**将“原始数据生成”和“特征工程”分离，不仅符合真实的AIOps落地流程（数据采集 -> 数据仓库 -> 算法模型），也能更好地验证数据处理管道的正确性。**
+
+我们把这个过程拆解为两个独立的阶段：
+
+1.  **阶段一：原始遥测数据生成器 (Raw Telemetry Generator)**
+    *   模拟真实的物理世界。生成类似Prometheus中存储的原始时序数据（光功率、电流、温度、SNR、状态位等）。
+    *   **产出：** `raw_telemetry_data.csv`
+
+2.  **阶段二：ETL与特征构建器 (ETL & Feature Builder)**
+    *   模拟数据仓库的处理逻辑。读取原始数据，执行滑动窗口聚合、计算趋势、关联对端数据、生成未来标签。
+    *   **产出：** `model_training_dataset.csv`
+
+---
+
+### **阶段一：原始遥测数据生成器 (Raw Telemetry Generator)**
+
+这个脚本模拟了光模块的物理特性。它会生成主机侧和网络侧的成对数据，并注入“老化”、“脏污”和“突发”三种故障模式。
+
+```python
+import pandas as pd
+import numpy as np
+import random
+
+# =================配置参数=================
+NUM_LINKS = 10              # 模拟10条链路 (20个模块)
+DURATION_DAYS = 90          # 模拟90天
+INTERVAL_MINUTES = 60       # 采样间隔 (为了演示速度设为60分钟，实际建议5-15分钟)
+START_TIME = '2024-01-01'
+# =========================================
+
+def generate_trend(length, start_val, end_val, noise_std=0.1):
+    """生成带有噪声的线性趋势"""
+    trend = np.linspace(start_val, end_val, length)
+    noise = np.random.normal(0, noise_std, length)
+    return trend + noise
+
+def simulate_link_physics(link_id, duration_steps):
+    """模拟单条链路（包含Host和Net两端）的物理行为"""
+    
+    # 时间索引
+    t_index = np.arange(duration_steps)
+    
+    # 1. 基础环境模拟 (温度随昼夜波动)
+    # -------------------------------------------------
+    base_temp = 45 + 5 * np.sin(t_index * (2 * np.pi / 24)) # 24小时周期
+    host_temp = base_temp + np.random.normal(0, 1, duration_steps)
+    net_temp = base_temp + np.random.normal(0, 1, duration_steps) + 2 # 交换机通常更热
+
+    # 2. 初始状态 (健康)
+    # -------------------------------------------------
+    host_tx_bias = np.random.normal(40, 0.5, duration_steps) # mA
+    net_tx_bias = np.random.normal(40, 0.5, duration_steps)
+    
+    host_tx_power = np.random.normal(-2, 0.1, duration_steps) # dBm
+    net_tx_power = np.random.normal(-2, 0.1, duration_steps)
+    
+    path_loss = np.random.normal(3, 0.05, duration_steps) # 光路损耗 dB
+    
+    # 3. 故障场景注入
+    # -------------------------------------------------
+    scenario = random.choice(['healthy', 'healthy', 'host_laser_aging', 'fiber_dirty'])
+    failure_start = int(duration_steps * 0.7) # 故障开始于后30%的时间
+    
+    if scenario == 'host_laser_aging':
+        # Host端激光器老化：Bias升高，Tx Power最终下降
+        aging_len = duration_steps - failure_start
+        # Bias 从40涨到90
+        drift = np.linspace(0, 50, aging_len)
+        host_tx_bias[failure_start:] += drift
+        
+        # Tx Power 在最后阶段下降
+        drop_start = failure_start + int(aging_len * 0.8)
+        drop_len = duration_steps - drop_start
+        host_tx_power[drop_start:] -= np.linspace(0, 10, drop_len)
+        
+    elif scenario == 'fiber_dirty':
+        # 光纤脏污：Path Loss 逐渐变大
+        dirty_len = duration_steps - failure_start
+        loss_drift = np.linspace(0, 20, dirty_len)
+        path_loss[failure_start:] += loss_drift
+
+    # 4. 计算交互物理量 (Rx, SNR, FEC)
+    # -------------------------------------------------
+    # Host Rx = Net Tx - Path Loss
+    host_rx_power = net_tx_power - path_loss
+    # Net Rx = Host Tx - Path Loss (假设双向损耗一致)
+    net_rx_power = host_tx_power - path_loss
+    
+    def calc_snr_fec(rx_pow):
+        # 简单物理模型：Rx越低，SNR越低
+        snr = 30 + (rx_pow - (-10)) * 1.5
+        snr = np.clip(snr + np.random.normal(0, 1, len(snr)), 0, 35)
+        
+        # FEC模型：SNR低于15dB时错误率指数上升
+        fec = np.zeros_like(snr)
+        mask = snr < 18
+        fec[mask] = 1000 * np.exp(0.5 * (18 - snr[mask]))
+        fec = fec + np.random.gamma(1, 2, len(fec)) # 添加随机底噪
+        return snr, fec
+
+    host_snr, host_fec = calc_snr_fec(host_rx_power)
+    net_snr, net_fec = calc_snr_fec(net_rx_power)
+
+    # 5. 生成状态位 (Status Flags)
+    # -------------------------------------------------
+    # Rx LOS: < -20 dBm
+    host_rx_los = (host_rx_power < -20).astype(int)
+    net_rx_los = (net_rx_power < -20).astype(int)
+    
+    # Tx Fault: Bias > 80 mA
+    host_tx_fault = (host_tx_bias > 80).astype(int)
+    net_tx_fault = (net_tx_bias > 80).astype(int)
+
+    # 6. 组装DataFrame
+    # -------------------------------------------------
+    # 这里我们生成宽表，模拟从Prometheus查询出来的结果
+    data = {
+        'timestamp': pd.date_range(start=START_TIME, periods=duration_steps, freq=f'{INTERVAL_MINUTES}min'),
+        'link_id': link_id,
+        # Host Side Metrics
+        'host_sn': f"H-{link_id:03d}",
+        'host_rx_power': host_rx_power,
+        'host_tx_power': host_tx_power,
+        'host_tx_bias': host_tx_bias,
+        'host_temp': host_temp,
+        'host_snr': host_snr,
+        'host_fec': host_fec,
+        'host_rx_los': host_rx_los,
+        'host_tx_fault': host_tx_fault,
+        # Net Side Metrics
+        'net_sn': f"N-{link_id:03d}",
+        'net_rx_power': net_rx_power,
+        'net_tx_power': net_tx_power,
+        'net_tx_bias': net_tx_bias,
+        'net_temp': net_temp,
+        'net_rx_los': net_rx_los,
+        'net_tx_fault': net_tx_fault
+    }
+    
+    return pd.DataFrame(data)
+
+# --- 主程序 ---
+if __name__ == "__main__":
+    print("Step 1: 正在生成原始遥测数据 (Raw Telemetry)...")
+    total_steps = int(DURATION_DAYS * 24 * (60 / INTERVAL_MINUTES))
+    
+    all_data = []
+    for i in range(NUM_LINKS):
+        df_link = simulate_link_physics(i, total_steps)
+        all_data.append(df_link)
+    
+    raw_df = pd.concat(all_data, ignore_index=True)
+    
+    # 保存原始数据
+    raw_filename = 'raw_optical_telemetry.csv'
+    raw_df.to_csv(raw_filename, index=False)
+    print(f"原始数据已生成: {raw_filename}, Shape: {raw_df.shape}")
+    print("包含字段:", raw_df.columns.tolist())
+```
+
+---
+
+### **阶段二：ETL与特征构建器 (ETL & Feature Builder)**
+
+这个脚本模拟了数据处理管道。它读取 `raw_optical_telemetry.csv`，执行特征工程，并生成模型所需的训练数据集。
+
+**关键逻辑：**
+1.  **按SN分组：** 对每个模块单独处理。
+2.  **滑动窗口 (Rolling Window):** 计算过去24小时的均值、方差、趋势。
+3.  **前向窗口 (Forward Window):** 偷看未来7天，生成 `target_*` 标签。
+
+```python
+import pandas as pd
+import numpy as np
+
+# =================配置参数=================
+INPUT_FILE = 'raw_optical_telemetry.csv'
+OUTPUT_FILE = 'model_training_dataset.csv'
+
+WINDOW_HOURS = 24       # 观测窗口: 过去24小时
+PREDICT_DAYS = 7        # 预测窗口: 未来7天
+INTERVAL_MINUTES = 60   # 必须与原始数据一致
+# =========================================
+
+def calculate_features_for_module(df_module, role='host'):
+    """
+    为单个模块计算特征和标签
+    role: 'host' 或 'net', 用于区分前缀
+    """
+    # 确定列名前缀
+    prefix = f"{role}_"
+    peer_prefix = "net_" if role == 'host' else "host_"
+    
+    # 排序
+    df_module = df_module.sort_values('timestamp')
+    
+    # 1. 定义特征列和窗口大小
+    window_size = int(WINDOW_HOURS * 60 / INTERVAL_MINUTES)
+    predict_size = int(PREDICT_DAYS * 24 * 60 / INTERVAL_MINUTES)
+    
+    # 需要计算统计量的基础指标
+    metrics = ['rx_power', 'tx_power', 'tx_bias', 'temp', 'snr', 'fec']
+    
+    # 2. 构建特征 (Feature Engineering)
+    features = pd.DataFrame(index=df_module.index)
+    
+    # 2.1 标识信息
+    features['snapshot_timestamp'] = df_module['timestamp']
+    features['module_sn'] = df_module[f'{prefix}sn']
+    features['link_id'] = df_module['link_id']
+    
+    # 2.2 本端连续指标统计 (Local Continuous Stats)
+    for m in metrics:
+        col = f"{prefix}{m}"
+        if col in df_module.columns:
+            # 均值
+            features[f'local_{m}_mean_W'] = df_module[col].rolling(window=window_size).mean()
+            # 标准差
+            features[f'local_{m}_stddev_W'] = df_module[col].rolling(window=window_size).std()
+            # 趋势 (当前值 - W之前的均值，简单的趋势表达)
+            features[f'local_{m}_trend_W'] = df_module[col] - df_module[col].shift(window_size)
+
+    # 2.3 对端关键指标 (Peer Context)
+    # 对端发射功率影响本端接收，非常重要
+    peer_tx_col = f"{peer_prefix}tx_power"
+    features['peer_tx_power_mean_W'] = df_module[peer_tx_col].rolling(window=window_size).mean()
+
+    # 2.4 事件统计 (Event Stats - Flap Count)
+    # 计算Rx LOS在窗口内从0变1的次数
+    los_col = f"{prefix}rx_los"
+    # diff()=1 表示 0->1 的跳变
+    features['local_rx_los_flap_count_W'] = (df_module[los_col].diff() == 1).rolling(window=window_size).sum()
+
+    # 3. 构建标签 (Label Generation - Look Forward)
+    # 使用反向rolling (indexer) 或者 shift(-H) 来实现前向查看
+    # 这里使用 shift 的最大值方式
+    
+    indexer = pd.api.indexers.FixedForwardWindowIndexer(window_size=predict_size)
+    
+    # 目标1: 未来H内是否发生 Rx LOS
+    features['target_rx_los_event_H'] = df_module[f'{prefix}rx_los'].rolling(window=indexer).max()
+    
+    # 目标2: 未来H内是否发生 Tx Fault
+    features['target_tx_fault_event_H'] = df_module[f'{prefix}tx_fault'].rolling(window=indexer).max()
+
+    # 4. 数据清洗
+    # 去除因为 rolling 产生的 NaN (前W行) 和标签无法生成的末尾 (后H行)
+    features = features.dropna()
+    
+    # 降采样 (Downsampling)
+    # 原始数据是每小时一条，特征数据没必要那么密，每4小时取一个快照用于训练即可
+    features = features.iloc[::4, :]
+    
+    return features
+
+# --- 主程序 ---
+if __name__ == "__main__":
+    print("Step 2: 正在执行ETL与特征构建...")
+    
+    # 读取原始数据
+    raw_df = pd.read_csv(INPUT_FILE)
+    raw_df['timestamp'] = pd.to_datetime(raw_df['timestamp'])
+    
+    all_features = []
+    
+    # 按 Link 处理 (因为需要对端信息)
+    for link_id, group in raw_df.groupby('link_id'):
+        # 1. 为 Host 端模块生成训练数据
+        host_feats = calculate_features_for_module(group, role='host')
+        host_feats['device_role'] = 'host'
+        all_features.append(host_feats)
+        
+        # 2. 为 Net 端模块生成训练数据 (可选，如果也要预测交换机模块)
+        net_feats = calculate_features_for_module(group, role='net')
+        net_feats['device_role'] = 'network'
+        all_features.append(net_feats)
+        
+    final_dataset = pd.concat(all_features, ignore_index=True)
+    
+    # 保存训练集
+    final_dataset.to_csv(OUTPUT_FILE, index=False)
+    
+    print(f"特征构建完成: {OUTPUT_FILE}")
+    print(f"数据集形状: {final_dataset.shape}")
+    print("\n--- 训练数据预览 (故障样本) ---")
+    faulty = final_dataset[final_dataset['target_tx_fault_event_H'] == 1]
+    if not faulty.empty:
+        print(faulty[['snapshot_timestamp', 'module_sn', 'local_tx_bias_mean_W', 'local_tx_bias_trend_W', 'target_tx_fault_event_H']].head())
+    else:
+        print("未生成故障样本，请调整模拟参数。")
+```
+
+---
+
+### **如何使用这套代码**
+
+1.  **运行脚本 1 (Generator):**
+    *   执行后会得到 `raw_optical_telemetry.csv`。
+    *   这就是模拟**Prometheus**里的数据，包含时间戳、SN号和原始物理量。你可以打开Excel看看，会发现数据是带噪声的，且有老化趋势。
+
+2.  **运行脚本 2 (ETL):**
+    *   执行后会得到 `model_training_dataset.csv`。
+    *   这就是**特征工程**后的数据。每一行代表一个“健康快照”。
+    *   你会看到 `local_tx_bias_trend_W`（趋势）和 `target_tx_fault_event_H`（未来标签）等字段。
+
+3.  **验证一致性:**
+    *   在特征数据中，找到一个 `target_tx_fault_event_H == 1` 的行。
+    *   查看它的 `local_tx_bias_trend_W`，应该是一个显著的正数（表示偏置电流在持续上升）。
+    *   这就是模型将要学习的规律：**趋势 -> 故障**。
+
+这套全流程代码完美地模拟了从**硬件物理层**到**监控数据层**，再到**AI模型层**的数据流转，是您验证预测算法原型的理想起点。
