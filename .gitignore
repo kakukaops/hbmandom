@@ -75,6 +75,13 @@ secrets.json
 *.json
 *.png
 
+# Model files
+*.h5
+*.pt
+*.ckpt
+*.model
+*.pkl
+
 # Package files
 *.tar.gz
 *.whl
