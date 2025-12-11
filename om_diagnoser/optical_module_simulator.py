@@ -10,6 +10,7 @@ Author: liyan
 Date: 2025-11-28
 """
 
+import os
 import pandas as pd
 import numpy as np
 import random
@@ -471,17 +472,21 @@ class OpticalModuleSimulator:
         print("="*50)
 
     def export_data(self,
-                   raw_output_path: str = 'data/optical_module_raw_data.csv',
-                   feature_output_path: str = 'data/optical_module_features.csv',
-                   metadata_output_path: str = 'metadata/optical_module_metadata.json'):
+                   raw_output_path: str = 'optical_module_raw_data.csv',
+                   feature_output_path: str = 'optical_module_features.csv',
+                   metadata_output_path: str = 'optical_module_metadata.json'):
         """Export simulation data to files."""
 
+        for data_dir in ['data', 'metadata']:
+            if not os.path.exists(data_dir):
+                os.makedirs(data_dir)
+
         if self.raw_data is not None:
-            self.raw_data.to_csv(raw_output_path, index=False)
+            self.raw_data.to_csv(os.path.join('data', raw_output_path), index=False)
             print(f"Raw data exported to: {raw_output_path}")
 
         if self.feature_data is not None:
-            self.feature_data.to_csv(feature_output_path, index=False)
+            self.feature_data.to_csv(os.path.join('data', feature_output_path), index=False)
             print(f"Feature data exported to: {feature_output_path}")
 
         if self.metadata:
@@ -493,7 +498,7 @@ class OpticalModuleSimulator:
                     metadata_serializable[sn]['metadata']['installation_date'] = \
                         metadata_serializable[sn]['metadata']['installation_date'].isoformat()
 
-            with open(metadata_output_path, 'w') as f:
+            with open(os.path.join('data', metadata_output_path), 'w') as f:
                 json.dump(metadata_serializable, f, indent=2)
             print(f"Metadata exported to: {metadata_output_path}")
 
@@ -514,17 +519,20 @@ def main():
     results = simulator.run_simulation()
 
     # Export data
+    raw_output_path='simulated_optical_module_data.csv'
+    feature_output_path='optical_module_training_features.csv'
+    metadata_output_path='optical_module_metadata.json'
     simulator.export_data(
-        raw_output_path='data/simulated_optical_module_data.csv',
-        feature_output_path='data/optical_module_training_features.csv',
-        metadata_output_path='metadata/optical_module_metadata.json'
+        raw_output_path=raw_output_path,
+        feature_output_path=feature_output_path,
+        metadata_output_path=metadata_output_path
     )
 
     print("\nSimulation completed successfully!")
     print("Generated files:")
-    print("  - data/simulated_optical_module_data.csv (raw time series)")
-    print("  - data/optical_module_training_features.csv (ML features)")
-    print("  - metadata/optical_module_metadata.json (module information)")
+    print(f"  - data/{raw_output_path} (raw time series)")
+    print(f"  - data/{feature_output_path} (ML features)")
+    print(f"  - metadata/{metadata_output_path} (module information)")
 
 
 if __name__ == "__main__":

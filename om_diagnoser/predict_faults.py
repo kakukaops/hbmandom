@@ -5,7 +5,7 @@ Optical Module Fault Prediction Script
 This script loads a trained XGBoost model and makes predictions on new data.
 It can be used for real-time fault prediction or batch prediction.
 
-Author: Claude Code
+Author: liyan
 Date: 2025-12-01
 """
 

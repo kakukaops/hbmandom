@@ -34,7 +34,7 @@ import os
 class OpticalModuleFaultPredictor:
     """Optical Module Fault Prediction using XGBoost."""
 
-    def __init__(self, data_path='data/optical_module_training_features.csv'):
+    def __init__(self, data_path: str, target_column: str = 'target_rx_los_event_7d'):
         """Initialize the predictor."""
         self.data_path = data_path
         self.data = None
@@ -49,6 +49,7 @@ class OpticalModuleFaultPredictor:
         self.scaler = StandardScaler()
         self.model = None
         self.feature_importance = None
+        self.target_column = target_column
 
         # Create output directories
         os.makedirs('models', exist_ok=True)
@@ -69,14 +70,14 @@ class OpticalModuleFaultPredictor:
 
         # Display target distribution
         print("\nTarget variable distribution:")
-        if 'target_rx_los_event_7d' in self.data.columns:
-            target_dist = self.data['target_rx_los_event_7d'].value_counts()
-            print(f"target_rx_los_event_7d:\n{target_dist}")
+        if self.target_column in self.data.columns:
+            target_dist = self.data[self.target_column].value_counts()
+            print(f"{self.target_column}:\n{target_dist}")
             print(f"Positive class ratio: {target_dist[1]/len(self.data):.4f}")
 
         return self.data
 
-    def preprocess_data(self, target_column='target_rx_los_event_7d'):
+    def preprocess_data(self):
         """Preprocess the data for modeling."""
         print("\nPreprocessing data...")
 
@@ -110,12 +111,12 @@ class OpticalModuleFaultPredictor:
         df = df.drop(columns=[col for col in drop_cols if col in df.columns])
 
         # 4. Prepare features and target
-        if target_column not in df.columns:
-            raise ValueError(f"Target column '{target_column}' not found in data")
+        if self.target_column not in df.columns:
+            raise ValueError(f"Target column '{self.target_column}' not found in data")
 
         # Separate features and target
-        self.y = df[target_column].astype(int)
-        self.X = df.drop(columns=[target_column])
+        self.y = df[self.target_column].astype(int)
+        self.X = df.drop(columns=[self.target_column])
 
         # Also drop other target columns if present
         other_targets = ['target_tx_fault_event_7d', 'target_fec_burst_7d']
@@ -439,11 +440,13 @@ class OpticalModuleFaultPredictor:
 
 
 def main():
-    """Main function to run the fault prediction pipeline."""
-    predictor = OpticalModuleFaultPredictor()
+    feature_data_path = 'data/optical_module_training_features.csv'
+    predictor = OpticalModuleFaultPredictor(data_path=feature_data_path)
     metrics = predictor.run_pipeline()
 
     # Save evaluation report
+    if not os.path.exists('reports'):
+        os.makedirs('reports')
     report_path = 'reports/model_evaluation_report.json'
     with open(report_path, 'w') as f:
         json.dump(metrics, f, indent=2)
