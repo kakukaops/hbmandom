@@ -6,7 +6,7 @@
 
 ```
 om_diagnoser/
-├── optical_module_simulator.py    # 光模块故障数据仿真器
+├── optical_module_simulator.py    # 光模块故障数据仿真与特征抽取
 ├── om_fault_predictor.py          # XGBoost故障预测模型训练
 ├── predict_faults.py              # 故障预测脚本
 ├── README.md                      # 项目说明文档
