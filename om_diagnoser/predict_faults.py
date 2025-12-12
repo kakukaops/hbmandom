@@ -295,14 +295,6 @@ def example_usage():
     except Exception as e:
         print(f"Example 2 error: {e}")
 
-    print("\n" + "=" * 60)
-    print("For batch prediction:")
-    print("  predictor = FaultPredictor()")
-    print("  new_data = pd.read_csv('your_data.csv')")
-    print("  predictions = predictor.predict(new_data)")
-    print("  predictions.to_csv('output.csv', index=False)")
-    print("=" * 60)
-
 
 def batch_prediction(input_csv, output_csv='predictions/fault_predictions.csv'):
     """Run batch prediction on a CSV file."""

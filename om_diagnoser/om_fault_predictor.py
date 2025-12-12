@@ -452,11 +452,6 @@ def main():
         json.dump(metrics, f, indent=2)
 
     print(f"\nEvaluation report saved to: {report_path}")
-    print("\nNext steps:")
-    print("1. Use the saved model for predictions with predict_faults.py")
-    print("2. Fine-tune hyperparameters for better performance")
-    print("3. Generate more data for rare fault scenarios")
-
 
 if __name__ == "__main__":
     main()
