@@ -1,0 +1,71 @@
+# 光模块故障标注规则配置
+# 支持用户自定义故障类型名称与故障标注规则
+
+# 输入输出文件配置
+files:
+  input_path: "data/simulated_optical_module_data.csv"
+  output_path: "data/labeled_optical_module_data.csv"
+
+# 故障标注规则
+rules:
+  # 规则1: 接收功率过低故障 (rx_low_power)
+  - name: "rx_low_power"
+    description: "接收功率过低故障"
+    conditions:
+      - column: "rx_power"
+        operator: "<"
+        value: -10.0
+    label_column: "rx_los"
+    label_value: 1
+
+  # 规则2: 发送功率过高故障 (tx_high_power)
+  - name: "tx_high_power"
+    description: "发送功率过高故障"
+    conditions:
+      - column: "tx_power"
+        operator: ">"
+        value: 2.0
+    label_column: "tx_fault"
+    label_value: 1
+
+  # 规则3: 温度过高故障 (high_temperature)
+  - name: "high_temperature"
+    description: "温度过高故障"
+    conditions:
+      - column: "temperature"
+        operator: ">"
+        value: 70.0
+    label_column: "rx_lol"
+    label_value: 1
+
+  # 规则4: 电压异常故障 (voltage_abnormal)
+  - name: "voltage_abnormal"
+    description: "电压异常故障"
+    conditions:
+      - column: "voltage"
+        operator: "<"
+        value: 3.0
+    label_column: "fec_burst"
+    label_value: 1
+
+  # 规则5: 复合条件故障 - SNR过低且FEC可纠正错误过多 (signal_degradation)
+  - name: "signal_degradation"
+    description: "信号质量下降故障"
+    conditions:
+      - column: "snr"
+        operator: "<"
+        value: 20.0
+      - column: "fec_correctable"
+        operator: ">"
+        value: 100.0
+    label_column: "rx_los"
+    label_value: 1
+
+# 支持的运算符
+supported_operators:
+  - "=="
+  - "!="
+  - ">"
+  - ">="
+  - "<"
+  - "<="
