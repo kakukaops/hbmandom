@@ -19,19 +19,7 @@ from datetime import datetime
 
 
 class AutoLabeler:
-    """
-    自动标注器类
-    
-    根据YAML配置文件中的规则对光模块数据进行自动标注。
-    """
-    
     def __init__(self, config_path: str = "config/rules.yaml"):
-        """
-        初始化自动标注器
-        
-        Args:
-            config_path: 规则配置文件路径
-        """
         self.config_path = config_path
         self.config = None
         self.rules = []
@@ -44,20 +32,15 @@ class AutoLabeler:
             "<=": lambda x, y: x <= y,
         }
         
-        # 设置日志
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
         self.logger = logging.getLogger(__name__)
         
-        # 加载配置
         self.load_config()
     
     def load_config(self) -> None:
-        """
-        加载YAML配置文件
-        """
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 self.config = yaml.safe_load(f)
@@ -92,15 +75,6 @@ class AutoLabeler:
             raise
     
     def _create_operator_func(self, operator: str):
-        """
-        创建运算符函数
-        
-        Args:
-            operator: 运算符字符串
-            
-        Returns:
-            对应的比较函数
-        """
         if operator == "==":
             return lambda x, y: x == y
         elif operator == "!=":
@@ -117,16 +91,6 @@ class AutoLabeler:
             raise ValueError(f"不支持的运算符: {operator}")
     
     def _evaluate_condition(self, row: pd.Series, condition: Dict[str, Any]) -> bool:
-        """
-        评估单个条件
-        
-        Args:
-            row: 数据行
-            condition: 条件字典
-            
-        Returns:
-            条件是否满足
-        """
         column = condition['column']
         operator = condition['operator']
         value = condition['value']
@@ -146,16 +110,6 @@ class AutoLabeler:
             return False
     
     def _evaluate_rule(self, row: pd.Series, rule: Dict[str, Any]) -> bool:
-        """
-        评估规则的所有条件
-        
-        Args:
-            row: 数据行
-            rule: 规则字典
-            
-        Returns:
-            规则是否满足
-        """
         if 'conditions' not in rule:
             self.logger.warning(f"规则 '{rule.get('name', '未知')}' 没有条件")
             return False
@@ -170,15 +124,6 @@ class AutoLabeler:
         return True
     
     def label_data(self, data: pd.DataFrame) -> pd.DataFrame:
-        """
-        对数据进行标注
-        
-        Args:
-            data: 原始数据
-            
-        Returns:
-            标注后的数据
-        """
         if data.empty:
             self.logger.warning("输入数据为空")
             return data
@@ -220,15 +165,6 @@ class AutoLabeler:
         return labeled_data
     
     def load_data(self, input_path: Optional[str] = None) -> pd.DataFrame:
-        """
-        加载输入数据
-        
-        Args:
-            input_path: 输入文件路径，如果为None则使用配置中的路径
-            
-        Returns:
-            加载的数据
-        """
         if input_path is None:
             if not self.config or 'files' not in self.config or 'input_path' not in self.config['files']:
                 raise ValueError("配置文件中未指定输入文件路径")
@@ -248,13 +184,6 @@ class AutoLabeler:
             raise
     
     def save_data(self, data: pd.DataFrame, output_path: Optional[str] = None) -> None:
-        """
-        保存标注后的数据
-        
-        Args:
-            data: 标注后的数据
-            output_path: 输出文件路径，如果为None则使用配置中的路径
-        """
         if output_path is None:
             if not self.config or 'files' not in self.config or 'output_path' not in self.config['files']:
                 raise ValueError("配置文件中未指定输出文件路径")
@@ -272,16 +201,6 @@ class AutoLabeler:
             raise
     
     def run(self, input_path: Optional[str] = None, output_path: Optional[str] = None) -> pd.DataFrame:
-        """
-        运行自动标注流程
-        
-        Args:
-            input_path: 输入文件路径（可选）
-            output_path: 输出文件路径（可选）
-            
-        Returns:
-            标注后的数据
-        """
         self.logger.info("开始自动标注流程...")
         
         # 加载数据
@@ -298,9 +217,6 @@ class AutoLabeler:
 
 
 if __name__ == '__main__':
-    """
-    测试代码
-    """
     print("开始测试自动标注器...")
     
     try:
