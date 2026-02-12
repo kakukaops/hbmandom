@@ -10,6 +10,7 @@ Author: liyan
 Date: 2025-11-28
 """
 
+import argparse
 import os
 import pandas as pd
 import numpy as np
@@ -504,24 +505,36 @@ class OpticalModuleSimulator:
 
 
 def main():
-    """Main function to demonstrate the simulator."""
+    parser = argparse.ArgumentParser(description="Optical Module Fault Data Simulator")
+    parser.add_argument('--period_days', type=int, default=60, help='Total simulation period in days')
+    parser.add_argument('--interval_minutes', type=int, default=15, help='Time interval between samples in minutes')
+    parser.add_argument('--fault_ratio', type=float, default=0.15, help='Ratio of modules that will experience faults')
+    parser.add_argument('--num_modules', type=int, default=30, help='Number of optical modules to simulate')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
+    parser.add_argument('--raw_output_path', type=str, default='simulated_optical_module_data.csv', help='Output path for raw data CSV')
+    parser.add_argument('--feature_output_path', type=str, default='optical_module_training_features.csv', help='Output path for feature data CSV')
+    parser.add_argument('--metadata_output_path', type=str, default='optical_module_metadata.json', help='Output path for metadata JSON')
+    parser.add_argument('--simulation', action='store_true', help='Run the optical module simulation')
+    parser.add_argument('--input_file', type=str, help='Path to input CSV file for preprocessing')
+    args = parser.parse_args()
+
 
     # Create simulator with example parameters
     simulator = OpticalModuleSimulator(
-        period_days=60,        # 60 days of data
-        interval_minutes=15,   # 15-minute intervals
-        fault_ratio=0.15,      # 15% of modules will experience faults
-        num_modules=30,        # 30 optical modules
-        seed=42                # For reproducible results
+        period_days=args.period_days,        # 60 days of data
+        interval_minutes=args.interval_minutes,   # 15-minute intervals
+        fault_ratio=args.fault_ratio,      # 15% of modules will experience faults
+        num_modules=args.num_modules,        # 30 optical modules
+        seed=args.seed                # For reproducible results
     )
 
     # Run simulation
     results = simulator.run_simulation()
 
     # Export data
-    raw_output_path='simulated_optical_module_data.csv'
-    feature_output_path='optical_module_training_features.csv'
-    metadata_output_path='optical_module_metadata.json'
+    raw_output_path=args.raw_output_path
+    feature_output_path=args.feature_output_path
+    metadata_output_path=args.metadata_output_path
     simulator.export_data(
         raw_output_path=raw_output_path,
         feature_output_path=feature_output_path,
