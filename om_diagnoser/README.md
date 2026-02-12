@@ -6,7 +6,7 @@
 
 ```
 om_diagnoser/
-├── optical_module_simulator.py    # 光模块故障数据仿真与特征抽取
+├── data_preprocessor.py           # 光模块故障数据仿真与特征抽取
 ├── auto_labeler.py                # 自动特征标注
 ├── om_fault_predictor.py          # XGBoost故障预测模型训练
 ├── predict_faults.py              # 故障预测脚本
@@ -42,10 +42,14 @@ om_diagnoser/
 uv pip install pandas numpy scikit-learn xgboost matplotlib seaborn joblib
 ```
 
-### 2. 生成仿真数据
+### 2. 数据处理
 
 ```bash
-python optical_module_simulator.py
+# 生成仿真数据并抽取特征（用于测试）
+python data_preprocessor.py --simulation
+
+# 基于收集的指标数据抽取特征
+python data_preprocessor.py --input_file </path/to/raw_features.csv>
 ```
 
 仿真器支持5种故障场景：
