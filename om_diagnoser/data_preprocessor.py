@@ -21,7 +21,7 @@ import uuid
 import json
 
 
-class OpticalModuleSimulator:
+class OpticalModuleLogPreprocessor:
     """
     Optical Module Fault Data Simulator
 
@@ -37,7 +37,9 @@ class OpticalModuleSimulator:
                  interval_minutes: int = 5,
                  fault_ratio: float = 0.1,
                  num_modules: int = 50,
-                 seed: int = 42):
+                 seed: int = 42,
+                 with_simulation: bool = True,
+                 input_file: Optional[str] = None):
         """
         Initialize the simulator.
 
@@ -53,6 +55,8 @@ class OpticalModuleSimulator:
         self.fault_ratio = fault_ratio
         self.num_modules = num_modules
         self.seed = seed
+        self.with_simulation = with_simulation
+        self.input_file = input_file
 
         # Set random seed for reproducibility
         np.random.seed(seed)
@@ -383,50 +387,54 @@ class OpticalModuleSimulator:
 
         return time_since
 
-    def run_simulation(self) -> Dict:
-        """Run the complete simulation and return results."""
+    def run_preprocessing(self) -> Dict:
+        """Run the complete preprocessing and return results."""
 
-        print(f"Starting optical module simulation...")
+        print(f"Starting optical module log preprocessing...")
         print(f"Parameters: {self.period_days} days, {self.interval_minutes} min interval, "
               f"{self.fault_ratio} fault ratio, {self.num_modules} modules")
 
-        # Generate time index
-        start_time = datetime(2024, 1, 1)
-        time_index = pd.date_range(
-            start=start_time,
-            periods=self.total_samples,
-            freq=self.sampling_freq
-        )
+        if self.with_simulation:
+            # Generate time index
+            start_time = datetime(2024, 1, 1)
+            time_index = pd.date_range(
+                start=start_time,
+                periods=self.total_samples,
+                freq=self.sampling_freq
+            )
 
-        all_raw_data = []
-        all_metadata = {}
+            all_raw_data = []
+            all_metadata = {}
 
-        # Simulate each module
-        for i in range(self.num_modules):
-            if i % 10 == 0:
-                print(f"Simulating module {i+1}/{self.num_modules}...")
+            # Simulate each module
+            for i in range(self.num_modules):
+                if i % 10 == 0:
+                    print(f"Simulating module {i+1}/{self.num_modules}...")
 
-            # Generate module metadata
-            metadata = self.generate_module_metadata()
+                # Generate module metadata
+                metadata = self.generate_module_metadata()
 
-            # Assign fault scenario
-            scenario, scenario_params = self.assign_fault_scenario()
+                # Assign fault scenario
+                scenario, scenario_params = self.assign_fault_scenario()
 
-            # Store metadata
-            all_metadata[metadata['serial_number']] = {
-                'metadata': metadata,
-                'scenario': scenario,
-                'scenario_params': scenario_params
-            }
+                # Store metadata
+                all_metadata[metadata['serial_number']] = {
+                    'metadata': metadata,
+                    'scenario': scenario,
+                    'scenario_params': scenario_params
+                }
 
-            # Simulate physical metrics
-            module_data = self.simulate_physical_metrics(metadata, scenario_params, time_index)
-            module_data['timestamp'] = time_index
+                # Simulate physical metrics
+                module_data = self.simulate_physical_metrics(metadata, scenario_params, time_index)
+                module_data['timestamp'] = time_index
 
-            all_raw_data.append(module_data)
+                all_raw_data.append(module_data)
 
-        # Combine all data
-        raw_df = pd.concat(all_raw_data, ignore_index=True)
+            # Combine all data
+            raw_df = pd.concat(all_raw_data, ignore_index=True)
+        else:
+            raw_df = pd.read_csv(self.input_file, parse_dates=['timestamp'])
+            all_metadata = {}  # Metadata would need to be extracted from the input file if available
 
         print("Generating features for machine learning...")
         feature_df = self.generate_features(raw_df)
@@ -482,7 +490,7 @@ class OpticalModuleSimulator:
             if not os.path.exists(data_dir):
                 os.makedirs(data_dir)
 
-        if self.raw_data is not None:
+        if self.with_simulation and self.raw_data is not None:
             self.raw_data.to_csv(os.path.join('data', raw_output_path), index=False)
             print(f"Raw data exported to: {raw_output_path}")
 
@@ -520,32 +528,31 @@ def main():
 
 
     # Create simulator with example parameters
-    simulator = OpticalModuleSimulator(
+    simulator = OpticalModuleLogPreprocessor(
         period_days=args.period_days,        # 60 days of data
         interval_minutes=args.interval_minutes,   # 15-minute intervals
         fault_ratio=args.fault_ratio,      # 15% of modules will experience faults
         num_modules=args.num_modules,        # 30 optical modules
-        seed=args.seed                # For reproducible results
+        seed=args.seed,                # For reproducible results
+        with_simulation=args.simulation,  # Whether to run simulation or read from input file
+        input_file=args.input_file if not args.simulation else None
     )
 
-    # Run simulation
-    results = simulator.run_simulation()
+    # Run preprocessing
+    simulator.run_preprocessing()
 
     # Export data
-    raw_output_path=args.raw_output_path
-    feature_output_path=args.feature_output_path
-    metadata_output_path=args.metadata_output_path
     simulator.export_data(
-        raw_output_path=raw_output_path,
-        feature_output_path=feature_output_path,
-        metadata_output_path=metadata_output_path
+        raw_output_path=args.raw_output_path,
+        feature_output_path=args.feature_output_path,
+        metadata_output_path=args.metadata_output_path
     )
 
-    print("\nSimulation completed successfully!")
+    print("\nPreprocessing completed successfully!")
     print("Generated files:")
-    print(f"  - data/{raw_output_path} (raw time series)")
-    print(f"  - data/{feature_output_path} (ML features)")
-    print(f"  - metadata/{metadata_output_path} (module information)")
+    print(f"  - data/{args.raw_output_path} (raw time series)")
+    print(f"  - data/{args.feature_output_path} (ML features)")
+    print(f"  - metadata/{args.metadata_output_path} (module information)")
 
 
 if __name__ == "__main__":
