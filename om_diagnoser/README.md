@@ -7,12 +7,15 @@
 ```
 om_diagnoser/
 ├── optical_module_simulator.py    # 光模块故障数据仿真与特征抽取
+├── auto_labeler.py                # 自动特征标注
 ├── om_fault_predictor.py          # XGBoost故障预测模型训练
 ├── predict_faults.py              # 故障预测脚本
 ├── README.md                      # 项目说明文档
 │
 ├── data/                          # 数据目录
 │   ├── simulated_optical_module_data.csv      # 原始仿真数据
+│   ├── labeled_optical_module_data.csv        # 标注后的特征数据
+│   ├── labeling_stats.json                    # 标注信息元数据
 │   └── optical_module_training_features.csv   # 特征工程后的训练数据
 │
 ├── models/                        # 模型文件目录
@@ -57,6 +60,13 @@ python optical_module_simulator.py
 - `data/simulated_optical_module_data.csv` - 原始时间序列数据
 - `data/optical_module_training_features.csv` - 处理后的特征数据
 - `metadata/optical_module_metadata.json` - 仿真生成的光模块元数据
+
+### 2.5. 标注数据
+
+支持基于自定义告警规则标注数据：
+
+1. 在[rules.yaml](config/rules.yaml)中配置输入输出文件路径、标注规则
+2. 支持自定义操作符、自定义标注label
 
 ### 3. 训练预测模型
 ```bash
