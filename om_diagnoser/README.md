@@ -6,50 +6,106 @@
 
 ```
 om_diagnoser/
-├── data_preprocessor.py           # 光模块故障数据仿真与特征抽取
-├── auto_labeler.py                # 自动特征标注
-├── om_fault_predictor.py          # XGBoost故障预测模型训练
-├── predict_faults.py              # 故障预测脚本
-├── README.md                      # 项目说明文档
+├── simulator.py                    # 光模块故障数据仿真器
+├── data_preprocessor.py            # 数据预处理与特征抽取
+├── auto_labeler.py                 # 自动特征标注
+├── om_fault_predictor.py           # XGBoost故障预测模型训练
+├── predict_faults.py               # 故障预测脚本
+├── simulator_config.py             # 仿真器预设配置
+├── run_pipeline.sh                 # 一键运行脚本
+├── README.md                       # 项目说明文档
 │
-├── data/                          # 数据目录
+├── config/                         # 配置文件目录
+│   ├── info.yaml                   # 模块规格、时间间隔、预测窗口等配置
+│   ├── rules.yaml                  # 标注规则配置
+│   └── hyper_parameters.yaml       # XGBoost超参数配置
+│
+├── data/                           # 数据目录
 │   ├── simulated_optical_module_data.csv      # 原始仿真数据
 │   ├── labeled_optical_module_data.csv        # 标注后的特征数据
 │   ├── labeling_stats.json                    # 标注信息元数据
 │   └── optical_module_training_features.csv   # 特征工程后的训练数据
 │
-├── models/                        # 模型文件目录
+├── metadata/                       # 元数据目录
+│   └── optical_module_metadata.json           # 光模块元数据
+│
+├── models/                         # 模型文件目录
 │   ├── om_fault_predictor.pkl              # 训练好的XGBoost模型
 │   ├── om_fault_predictor_scaler.pkl       # 特征标准化器
 │   ├── om_fault_predictor_encoders.pkl     # 分类变量编码器
 │   ├── om_fault_predictor_features.json    # 特征名称
 │   └── om_fault_predictor_metadata.json    # 模型元数据
 │
-├── reports/                       # 评估报告
+├── reports/                        # 评估报告
 │   └── model_evaluation_report.json        # 模型评估结果
 │
-├── plots/                         # 可视化图表
+├── plots/                          # 可视化图表
 │   └── model_evaluation.png                # 模型评估图表
 │
-└── predictions/                   # 预测结果
+└── predictions/                    # 预测结果
     └── test_predictions.csv                # 测试预测结果
 ```
+
+## 快速开始
+
+### 一键运行
+
+使用示例数据一键运行完整流程（数据标注 → 特征生成 → 模型训练）：
+
+```bash
+# 使用默认参数（输入：data/simulated_optical_module_data.csv，目标：rx_los）
+./run_pipeline.sh
+
+# 指定输入文件和预测目标
+./run_pipeline.sh data/your_data.csv tx_fault
+```
+
+支持的预测目标（需在 `config/rules.yaml` 中定义）：
+- `rx_los` - 接收端信号丢失
+- `tx_fault` - 发送端故障
+- `rx_lol` - 接收端失锁
+- `fec_burst` - FEC突发错误
 
 ## 数据仿真与模型训练
 
 ### 1. 环境要求
 ```bash
-uv pip install pandas numpy scikit-learn xgboost matplotlib seaborn joblib
+uv pip install pandas numpy scikit-learn xgboost matplotlib seaborn joblib pyyaml
 ```
 
 ### 2. 数据处理
 
-```bash
-# 生成仿真数据并抽取特征（用于测试）
-python data_preprocessor.py --simulation
+#### 2.1 配置说明
 
-# 基于收集的指标数据抽取特征
-python data_preprocessor.py --input_file </path/to/raw_features.csv>
+| 配置文件 | 说明 |
+|---------|------|
+| `config/info.yaml` | 模块规格参数、采样间隔、预测窗口 |
+| `config/rules.yaml` | 标注规则定义（输入输出路径、条件规则） |
+| `config/hyper_parameters.yaml` | XGBoost超参数配置 |
+
+`config/info.yaml` 主要配置项：
+- `module_specs`: 光模块规格参数（接收功率范围、发射功率标称值等）
+- `interval_minutes`: 数据采样间隔（分钟）
+- `predict_window_days`: 预测窗口（天数）
+
+`config/hyper_parameters.yaml` 主要配置项：
+- `xgboost.max_depth`: 树的最大深度
+- `xgboost.learning_rate`: 学习率
+- `xgboost.n_estimators`: 树的数量
+- `data_split.test_size`: 测试集比例
+- `cross_validation.n_splits`: 交叉验证折数
+
+#### 2.2 生成仿真数据
+
+```bash
+# 生成仿真数据并抽取特征
+python data_preprocessor.py --simulation --period_days 30 --num_modules 10 --fault_ratio 0.2
+
+# 参数说明：
+#   --period_days      仿真周期（天）
+#   --num_modules      仿真光模块数量
+#   --fault_ratio      故障比例
+#   --seed             随机种子
 ```
 
 仿真器支持5种故障场景：
@@ -65,18 +121,49 @@ python data_preprocessor.py --input_file </path/to/raw_features.csv>
 - `data/optical_module_training_features.csv` - 处理后的特征数据
 - `metadata/optical_module_metadata.json` - 仿真生成的光模块元数据
 
-### 2.5. 标注数据
+#### 2.3 标注数据
 
 支持基于自定义告警规则标注数据：
 
-1. 在[rules.yaml](config/rules.yaml)中配置输入输出文件路径、标注规则
+```bash
+python auto_labeler.py
+```
+
+1. 在 `config/rules.yaml` 中配置输入输出文件路径、标注规则
 2. 支持自定义操作符、自定义标注label
 
-### 3. 训练预测模型
+标注后生成：
+- `data/labeled_optical_module_data.csv` - 标注后的数据
+
+#### 2.4 基于已有数据抽取特征
+
 ```bash
-python om_fault_predictor.py
+# 基于收集的指标数据或标注后的数据抽取特征
+python data_preprocessor.py --input_file data/labeled_optical_module_data.csv
 ```
-这将：
+
+### 3. 训练预测模型
+
+```bash
+# 使用默认配置训练 rx_los 预测模型
+python om_fault_predictor.py
+
+# 指定预测目标
+python om_fault_predictor.py --target tx_fault
+
+# 指定数据文件和超参数配置
+python om_fault_predictor.py --data data/features.csv --target rx_los --hyperparams config/hyper_parameters.yaml
+```
+
+命令行参数：
+| 参数 | 说明 | 默认值 |
+|-----|------|-------|
+| `--data` | 特征数据文件路径 | `data/optical_module_training_features.csv` |
+| `--target` | 预测目标（rx_los/tx_fault/rx_lol/fec_burst） | `rx_los` |
+| `--hyperparams` | 超参数配置文件路径 | `config/hyper_parameters.yaml` |
+| `--rules` | 标注规则配置文件路径 | `config/rules.yaml` |
+
+训练完成后将：
 - 加载特征数据
 - 训练XGBoost模型
 - 评估模型性能

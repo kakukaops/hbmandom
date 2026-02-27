@@ -1,0 +1,48 @@
+# 光模块规格配置
+# 用于数据预处理和特征生成
+
+# 光模块规格参数
+module_specs:
+  rx_power_min: -14.0  # dBm
+  rx_power_max: 2.0    # dBm
+  tx_power_nominal: -2.0  # dBm
+  tx_bias_nominal: 40.0   # mA
+  temp_nominal: 45.0      # °C
+  temp_max: 75.0          # °C
+  voltage_nominal: 3.3    # V
+  snr_nominal: 30.0       # dB
+
+# 时间间隔配置（分钟）
+interval_minutes: 15
+
+# 预测窗口配置（天数）
+predict_window_days: 7
+
+# 故障场景定义
+fault_scenarios:
+  - healthy
+  - laser_aging      # 激光器老化
+  - fiber_contamination  # 光纤接口污染
+  - temperature_stress   # 过热应力
+  - sudden_failure       # 突发故障
+  - intermittent_fault   # 间歇性故障
+
+# 供应商和型号选项（用于仿真）
+vendors:
+  - Finisar
+  - Cisco
+  - Mellanox
+  - Intel
+  - Broadcom
+
+models:
+  - QSFP-100G-SR4
+  - QSFP28-100G-CWDM4
+  - QSFP-DD-400G-DR4
+  - SFP28-25G-SR
+
+# 通道数选项
+num_lanes_options:
+  - 1
+  - 4
+  - 8

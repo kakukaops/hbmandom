@@ -1,0 +1,45 @@
+# XGBoost 超参数配置
+# 用于光模块故障预测模型训练
+
+xgboost:
+  # 目标函数
+  objective: "binary:logistic"
+  eval_metric: "auc"
+  
+  # 树结构参数
+  max_depth: 6
+  min_child_weight: 1
+  gamma: 0
+  
+  # 学习参数
+  learning_rate: 0.1
+  n_estimators: 100
+  
+  # 采样参数
+  subsample: 0.8
+  colsample_bytree: 0.8
+  
+  # 正则化参数
+  reg_alpha: 0
+  reg_lambda: 1
+  
+  # 其他参数
+  random_state: 42
+  n_jobs: -1
+
+# 特征选择参数
+feature_selection:
+  enabled: false
+  k: 20
+
+# 数据划分参数
+data_split:
+  test_size: 0.2
+  random_state: 42
+
+# 交叉验证参数
+cross_validation:
+  enabled: true
+  n_splits: 5
+  shuffle: true
+  random_state: 42
