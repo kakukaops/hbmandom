@@ -113,7 +113,7 @@ om_diagnoser/
 #### 1.2 生成仿真数据
 
 ```bash
-# 生成仿真数据并抽取特征
+# 如果还没有现成的监控数据，可以使用如下代码生成仿真数据并抽取特征进行测试，默认存储在data/simulated_optical_mudule_data.csv中
 python data_preprocessor.py --simulation --period_days 30 --num_modules 10 --fault_ratio 0.2
 
 # 参数说明：
@@ -153,6 +153,7 @@ python auto_labeler.py
 #### 1.4 基于已有数据抽取特征
 
 ```bash
+# 如果有现成的监控数据，请按照 data/simulated_optical_module_data.csv 组织你的数据，并使用 auto_labeler 进行标注
 # 基于收集的指标数据或标注后的数据抽取特征
 python data_preprocessor.py --input_file data/labeled_optical_module_data.csv
 ```
