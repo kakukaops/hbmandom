@@ -1,6 +1,6 @@
 # 光模块故障数据仿真与预测
 
-光模块故障预测算法，使用仿真数据训练模型，能够预测光模块在未来7天内发生故障的概率。
+光模块故障预测算法，基于用户定义的故障类型和标注规则，自动标注采集的监控数据，并训练故障预测模型
 
 ## 环境要求
 
@@ -86,7 +86,7 @@ om_diagnoser/
 - `rx_lol` - 接收端失锁
 - `fec_burst` - FEC突发错误
 
-## 数据仿真与模型训练
+## 模型训练详细流程
 
 ### 1. 数据处理
 
@@ -154,7 +154,7 @@ python auto_labeler.py
 
 ```bash
 # 如果有现成的监控数据，请按照 data/simulated_optical_module_data.csv 组织你的数据，并使用 auto_labeler 进行标注
-# 基于收集的指标数据或标注后的数据抽取特征
+# 基于标注后的数据抽取特征
 python data_preprocessor.py --input_file data/labeled_optical_module_data.csv
 ```
 

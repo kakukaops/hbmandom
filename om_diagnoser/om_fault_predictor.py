@@ -457,8 +457,9 @@ class OpticalModuleFaultPredictor:
 
         print("Plots saved to 'plots/model_evaluation.png'")
 
-    def save_model(self, model_name="om_fault_predictor"):
-        """Save the trained model and related artifacts."""
+    def save_model(self):
+        """Save the trained model and related artifacts with fault type suffix."""
+        model_name = f"om_fault_predictor_{self.fault_type}"
         print(f"\nSaving model as '{model_name}'...")
 
         model_path = f"models/{model_name}.pkl"
