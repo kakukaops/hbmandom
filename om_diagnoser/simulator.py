@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""
-Optical Module Fault Data Simulator
-
-This simulator generates realistic optical module time series data for fault prediction.
-Based on the requirements from ompredict.md, it simulates various fault scenarios
-including laser aging, fiber contamination, and sudden failures.
-
-Author: liyan
-Date: 2025-11-28
-"""
 
 import pandas as pd
 import numpy as np

@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""
-光模块故障自动标注器
-
-根据用户定义的规则对原始指标特征文件进行自动化标注。
-支持自定义故障类型名称与故障标注规则。
-
-Author: liyan
-Date: 2025-11-28
-"""
 
 import os
 import pandas as pd

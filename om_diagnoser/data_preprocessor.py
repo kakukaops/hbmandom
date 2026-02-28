@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""
-Optical Module Log Preprocessor
-
-This module preprocesses optical module log data for fault prediction.
-It can either generate simulated data or process real input data.
-
-Author: liyan
-Date: 2025-11-28
-"""
 
 import argparse
 import os

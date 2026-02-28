@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""
-Optical Module Fault Predictor using XGBoost
-
-This script builds an XGBoost model to predict optical module faults
-based on simulated data from optical_module_simulator.py.
-
-Author: liyan
-Date: 2025-12-01
-"""
 
 import pandas as pd
 import numpy as np

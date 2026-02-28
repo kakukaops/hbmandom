@@ -13,6 +13,7 @@ TARGET="${2:-}"
 
 echo "=============================================="
 echo "光模块故障预测一键运行脚本"
+echo "如果没有测试数据，请运行 python data_preprocessor.py --simulation 来生成模拟数据"
 echo "=============================================="
 echo "输入文件: $INPUT_FILE"
 echo "故障类型: 从 config/rules.yaml 动态获取"
@@ -35,14 +36,3 @@ if [ -n "$TARGET" ]; then
 else
     python om_fault_predictor.py --data data/optical_module_training_features.csv
 fi
-
-echo ""
-echo "=============================================="
-echo "流程执行完成!"
-echo "=============================================="
-echo "生成的文件:"
-echo "  - data/labeled_optical_module_data.csv"
-echo "  - data/optical_module_training_features.csv"
-echo "  - models/om_fault_predictor.pkl"
-echo "  - plots/model_evaluation.png"
-echo "  - reports/model_evaluation_report.json"
