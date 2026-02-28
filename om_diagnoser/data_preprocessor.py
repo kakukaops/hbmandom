@@ -16,7 +16,7 @@ import numpy as np
 import json
 import yaml
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set
 import uuid
 
 from simulator import OpticalModuleSimulator
@@ -39,6 +39,7 @@ class OpticalModuleLogPreprocessor:
         with_simulation: bool = True,
         input_file: Optional[str] = None,
         config_path: Optional[str] = None,
+        rules_path: Optional[str] = None,
     ):
         """
         Initialize the preprocessor.
@@ -50,7 +51,8 @@ class OpticalModuleLogPreprocessor:
             seed: Random seed for reproducibility
             with_simulation: Whether to run simulation or read from input file
             input_file: Path to input CSV file (required if with_simulation=False)
-            config_path: Path to config YAML file
+            config_path: Path to info.yaml config file
+            rules_path: Path to rules.yaml config file
         """
         self.period_days = period_days
         self.fault_ratio = fault_ratio
@@ -59,7 +61,8 @@ class OpticalModuleLogPreprocessor:
         self.with_simulation = with_simulation
         self.input_file = input_file
 
-        self.config = self._load_config(config_path)
+        self.config = self._load_yaml(config_path, "config/info.yaml")
+        self.rules = self._load_yaml(rules_path, "config/rules.yaml")
 
         self.interval_minutes = self.config.get("interval_minutes", 15)
         self.predict_window_days = self.config.get("predict_window_days", 7)
@@ -77,23 +80,39 @@ class OpticalModuleLogPreprocessor:
             },
         )
 
+        self.fault_types = self._get_fault_types()
+        print(f"Loaded fault types from rules: {self.fault_types}")
+
         np.random.seed(seed)
 
         self.raw_data = []
         self.feature_data = []
         self.metadata = {}
 
-    def _load_config(self, config_path: Optional[str] = None) -> Dict:
+    def _load_yaml(self, path: Optional[str], default_path: str) -> Dict:
         """Load configuration from YAML file."""
-        if config_path is None:
-            config_path = os.path.join(os.path.dirname(__file__), "config", "info.yaml")
+        if path is None:
+            path = os.path.join(os.path.dirname(__file__), default_path)
 
-        if os.path.exists(config_path):
-            with open(config_path, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f)
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
         else:
-            print(f"Warning: Config file {config_path} not found, using defaults.")
+            print(f"Warning: Config file {path} not found, using defaults.")
             return {}
+
+    def _get_fault_types(self) -> Set[str]:
+        """Extract fault types (label_column) from rules.yaml."""
+        fault_types = set()
+        if self.rules and "rules" in self.rules:
+            for rule in self.rules["rules"]:
+                if "label_column" in rule:
+                    fault_types.add(rule["label_column"])
+        return fault_types
+
+    def _get_target_column_name(self, fault_type: str) -> str:
+        """Generate target column name dynamically based on fault type and predict window."""
+        return f"target_{fault_type}_event_{self.predict_window_days}d"
 
     def generate_features(self, raw_data: pd.DataFrame) -> pd.DataFrame:
         """Generate features for machine learning from raw data."""
@@ -146,33 +165,27 @@ class OpticalModuleLogPreprocessor:
                 features["local_rx_power_mean_24h"] - self.module_specs["rx_power_min"]
             ) / (self.module_specs["rx_power_max"] - self.module_specs["rx_power_min"])
 
-            features["rx_los_flap_count_24h"] = (
-                (df["rx_los"].diff() == 1).rolling(window=window_size).sum()
-            )
-            features["tx_fault_flap_count_24h"] = (
-                (df["tx_fault"].diff() == 1).rolling(window=window_size).sum()
-            )
-
-            features["time_since_last_rx_los_hours"] = self._calculate_time_since_event(
-                df, "rx_los"
-            )
-            features["time_since_last_tx_fault_hours"] = (
-                self._calculate_time_since_event(df, "tx_fault")
-            )
-
             indexer = pd.api.indexers.FixedForwardWindowIndexer(
                 window_size=predict_window
             )
 
-            features["target_rx_los_event_7d"] = (
-                df["rx_los"].rolling(window=indexer).max()
-            )
-            features["target_tx_fault_event_7d"] = (
-                df["tx_fault"].rolling(window=indexer).max()
-            )
-            features["target_fec_burst_7d"] = (
-                df["fec_correctable"].rolling(window=indexer).max() > 1000
-            ).astype(int)
+            for fault_type in self.fault_types:
+                if fault_type in df.columns:
+                    target_col = self._get_target_column_name(fault_type)
+                    features[target_col] = df[fault_type].rolling(window=indexer).max()
+                    if fault_type == "fec_burst":
+                        features[target_col] = (
+                            df["fec_correctable"].rolling(window=indexer).max() > 1000
+                        ).astype(int)
+
+            for fault_type in self.fault_types:
+                if fault_type in df.columns:
+                    features[f"{fault_type}_flap_count_24h"] = (
+                        (df[fault_type].diff() == 1).rolling(window=window_size).sum()
+                    )
+                    features[f"time_since_last_{fault_type}_hours"] = (
+                        self._calculate_time_since_event(df, fault_type)
+                    )
 
             valid_start = window_size
             valid_end = len(features) - predict_window
@@ -216,6 +229,7 @@ class OpticalModuleLogPreprocessor:
         print(
             f"Interval: {self.interval_minutes} min, Predict window: {self.predict_window_days} days"
         )
+        print(f"Fault types: {self.fault_types}")
 
         if self.with_simulation:
             simulator = OpticalModuleSimulator(
@@ -274,12 +288,11 @@ class OpticalModuleLogPreprocessor:
                 percentage = (count / len(self.raw_data)) * 100
                 print(f"  {scenario}: {count} samples ({percentage:.1f}%)")
 
-            if "rx_los" in self.raw_data.columns:
-                rx_los_count = self.raw_data["rx_los"].sum()
-                tx_fault_count = self.raw_data["tx_fault"].sum()
-                print(f"\nFault events:")
-                print(f"  Rx LOS events: {rx_los_count}")
-                print(f"  Tx Fault events: {tx_fault_count}")
+            print(f"\nFault events by type:")
+            for fault_type in self.fault_types:
+                if fault_type in self.raw_data.columns:
+                    count = self.raw_data[fault_type].sum()
+                    print(f"  {fault_type}: {count} events")
 
         print("=" * 50)
 
@@ -370,7 +383,8 @@ def main():
     parser.add_argument(
         "--input_file", type=str, help="Path to input CSV file for preprocessing"
     )
-    parser.add_argument("--config", type=str, help="Path to config YAML file")
+    parser.add_argument("--config", type=str, help="Path to info.yaml config file")
+    parser.add_argument("--rules", type=str, help="Path to rules.yaml config file")
     args = parser.parse_args()
 
     preprocessor = OpticalModuleLogPreprocessor(
@@ -381,6 +395,7 @@ def main():
         with_simulation=args.simulation,
         input_file=args.input_file if not args.simulation else None,
         config_path=args.config,
+        rules_path=args.rules,
     )
 
     preprocessor.run_preprocessing()

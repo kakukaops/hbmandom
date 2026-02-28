@@ -1,6 +1,7 @@
 #!/bin/bash
 # 光模块故障预测一键运行脚本
 # 执行数据标注 -> 特征生成 -> 模型训练完整流程
+# 所有故障类型均从 config/rules.yaml 中动态获取
 
 set -e
 
@@ -8,13 +9,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 INPUT_FILE="${1:-data/simulated_optical_module_data.csv}"
-TARGET="${2:-rx_los}"
+TARGET="${2:-}"
 
 echo "=============================================="
 echo "光模块故障预测一键运行脚本"
 echo "=============================================="
 echo "输入文件: $INPUT_FILE"
-echo "预测目标: $TARGET"
+echo "故障类型: 从 config/rules.yaml 动态获取"
+if [ -n "$TARGET" ]; then
+    echo "指定目标: $TARGET"
+fi
 echo ""
 
 echo "[1/3] 运行数据标注..."
@@ -26,7 +30,11 @@ python data_preprocessor.py --input_file data/labeled_optical_module_data.csv
 
 echo ""
 echo "[3/3] 训练预测模型..."
-python om_fault_predictor.py --data data/optical_module_training_features.csv --target "$TARGET"
+if [ -n "$TARGET" ]; then
+    python om_fault_predictor.py --data data/optical_module_training_features.csv --target "$TARGET"
+else
+    python om_fault_predictor.py --data data/optical_module_training_features.csv
+fi
 
 echo ""
 echo "=============================================="

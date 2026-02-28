@@ -2,6 +2,19 @@
 
 光模块故障预测算法，使用仿真数据训练模型，能够预测光模块在未来7天内发生故障的概率。
 
+## 环境要求
+
+- **Python**: >= 3.8
+- **依赖包**: 见 `requirements.txt`
+
+```bash
+# 安装依赖
+pip install -r requirements.txt
+
+# 或使用 uv
+uv pip install -r requirements.txt
+```
+
 ## 项目结构
 
 ```
@@ -13,6 +26,7 @@ om_diagnoser/
 ├── predict_faults.py               # 故障预测脚本
 ├── simulator_config.py             # 仿真器预设配置
 ├── run_pipeline.sh                 # 一键运行脚本
+├── requirements.txt                # Python依赖包
 ├── README.md                       # 项目说明文档
 │
 ├── config/                         # 配置文件目录
@@ -25,6 +39,12 @@ om_diagnoser/
 │   ├── labeled_optical_module_data.csv        # 标注后的特征数据
 │   ├── labeling_stats.json                    # 标注信息元数据
 │   └── optical_module_training_features.csv   # 特征工程后的训练数据
+│
+├── example_data/                   # 示例数据目录
+│   ├── features_sample.csv         # 特征数据样本
+│   ├── prediction_sample.csv       # 预测结果样本
+│   └── models/                     # 示例模型
+│       └── om_fault_predictor.pkl  # 预训练模型
 │
 ├── metadata/                       # 元数据目录
 │   └── optical_module_metadata.json           # 光模块元数据
@@ -68,14 +88,9 @@ om_diagnoser/
 
 ## 数据仿真与模型训练
 
-### 1. 环境要求
-```bash
-uv pip install pandas numpy scikit-learn xgboost matplotlib seaborn joblib pyyaml
-```
+### 1. 数据处理
 
-### 2. 数据处理
-
-#### 2.1 配置说明
+#### 1.1 配置说明
 
 | 配置文件 | 说明 |
 |---------|------|
@@ -95,7 +110,7 @@ uv pip install pandas numpy scikit-learn xgboost matplotlib seaborn joblib pyyam
 - `data_split.test_size`: 测试集比例
 - `cross_validation.n_splits`: 交叉验证折数
 
-#### 2.2 生成仿真数据
+#### 1.2 生成仿真数据
 
 ```bash
 # 生成仿真数据并抽取特征
@@ -121,7 +136,7 @@ python data_preprocessor.py --simulation --period_days 30 --num_modules 10 --fau
 - `data/optical_module_training_features.csv` - 处理后的特征数据
 - `metadata/optical_module_metadata.json` - 仿真生成的光模块元数据
 
-#### 2.3 标注数据
+#### 1.3 标注数据
 
 支持基于自定义告警规则标注数据：
 
@@ -135,14 +150,14 @@ python auto_labeler.py
 标注后生成：
 - `data/labeled_optical_module_data.csv` - 标注后的数据
 
-#### 2.4 基于已有数据抽取特征
+#### 1.4 基于已有数据抽取特征
 
 ```bash
 # 基于收集的指标数据或标注后的数据抽取特征
 python data_preprocessor.py --input_file data/labeled_optical_module_data.csv
 ```
 
-### 3. 训练预测模型
+### 2. 训练预测模型
 
 ```bash
 # 使用默认配置训练 rx_los 预测模型
@@ -170,7 +185,7 @@ python om_fault_predictor.py --data data/features.csv --target rx_los --hyperpar
 - 保存模型到`models/`目录
 - 生成可视化图表到`plots/`
 
-### 4. 使用模型进行预测
+### 3. 使用模型进行预测
 
 #### 批量预测：
 ```bash
@@ -200,3 +215,13 @@ print(f"预测结果: {result}")
 ```bash
 python predict_faults.py --example
 ```
+
+## 示例数据
+
+`example_data/` 目录包含示例数据，方便快速测试：
+
+| 文件 | 说明 |
+|------|------|
+| `features_sample.csv` | 特征数据样本，可直接用于模型预测 |
+| `prediction_sample.csv` | 预测结果样本格式 |
+| `models/om_fault_predictor.pkl` | 预训练模型，可直接加载使用 |

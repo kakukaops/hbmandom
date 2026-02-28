@@ -44,35 +44,43 @@ import joblib
 import json
 
 
-TARGET_MAPPING = {
-    "rx_los": "target_rx_los_event_7d",
-    "tx_fault": "target_tx_fault_event_7d",
-    "rx_lol": "target_rx_lol_event_7d",
-    "fec_burst": "target_fec_burst_7d",
-}
+def load_yaml(path: str, default_path: str = None) -> dict:
+    """Load YAML file."""
+    if path is None or not os.path.exists(path):
+        if default_path and os.path.exists(default_path):
+            path = default_path
+        else:
+            return {}
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
 
 
 def get_available_targets(rules_path: str = "config/rules.yaml") -> list:
     """Get available target labels from rules.yaml."""
-    if os.path.exists(rules_path):
-        with open(rules_path, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-        if config and "rules" in config:
-            targets = set()
-            for rule in config["rules"]:
-                if "label_column" in rule:
-                    targets.add(rule["label_column"])
-            return list(targets)
-    return ["rx_los", "tx_fault", "rx_lol", "fec_burst"]
+    rules = load_yaml(rules_path)
+    if rules and "rules" in rules:
+        targets = set()
+        for rule in rules["rules"]:
+            if "label_column" in rule:
+                targets.add(rule["label_column"])
+        return list(targets)
+    return []
+
+
+def get_predict_window_days(info_path: str = "config/info.yaml") -> int:
+    """Get predict window days from info.yaml."""
+    info = load_yaml(info_path)
+    return info.get("predict_window_days", 7)
+
+
+def get_target_column_name(fault_type: str, predict_window_days: int) -> str:
+    """Generate target column name dynamically."""
+    return f"target_{fault_type}_event_{predict_window_days}d"
 
 
 def load_hyperparameters(config_path: str = "config/hyper_parameters.yaml") -> dict:
     """Load hyperparameters from config file."""
-    if os.path.exists(config_path):
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-        return config
-    return {}
+    return load_yaml(config_path)
 
 
 class OpticalModuleFaultPredictor:
@@ -81,11 +89,16 @@ class OpticalModuleFaultPredictor:
     def __init__(
         self,
         data_path: str,
-        target_column: str = "target_rx_los_event_7d",
+        fault_type: str,
+        predict_window_days: int = 7,
         hyperparams_path: str = "config/hyper_parameters.yaml",
     ):
         """Initialize the predictor."""
         self.data_path = data_path
+        self.fault_type = fault_type
+        self.predict_window_days = predict_window_days
+        self.target_column = get_target_column_name(fault_type, predict_window_days)
+
         self.data = None
         self.X = None
         self.y = None
@@ -98,13 +111,24 @@ class OpticalModuleFaultPredictor:
         self.scaler = StandardScaler()
         self.model = None
         self.feature_importance = None
-        self.target_column = target_column
 
         self.hyperparams = load_hyperparameters(hyperparams_path)
 
         os.makedirs("models", exist_ok=True)
         os.makedirs("reports", exist_ok=True)
         os.makedirs("plots", exist_ok=True)
+
+    def _get_all_target_columns(self) -> list:
+        """Get all target columns that match the pattern target_*_event_{predict_window_days}d."""
+        if self.data is None:
+            return []
+        target_cols = []
+        prefix = f"target_"
+        suffix = f"_event_{self.predict_window_days}d"
+        for col in self.data.columns:
+            if col.startswith(prefix) and col.endswith(suffix):
+                target_cols.append(col)
+        return target_cols
 
     def load_data(self):
         """Load and explore the dataset."""
@@ -125,7 +149,8 @@ class OpticalModuleFaultPredictor:
                 print(f"Positive class ratio: {target_dist[1] / len(self.data):.4f}")
         else:
             print(f"Warning: Target column '{self.target_column}' not found in data")
-            print(f"Available columns: {self.data.columns.tolist()}")
+            available_targets = self._get_all_target_columns()
+            print(f"Available target columns: {available_targets}")
 
         return self.data
 
@@ -140,11 +165,8 @@ class OpticalModuleFaultPredictor:
         if missing_cols:
             print(f"Columns with missing values: {missing_cols}")
 
-            for col in [
-                "time_since_last_rx_los_hours",
-                "time_since_last_tx_fault_hours",
-            ]:
-                if col in df.columns:
+            for col in df.columns:
+                if col.startswith("time_since_last_") and col.endswith("_hours"):
                     df[col] = df[col].fillna(10000)
 
         print("Encoding categorical variables...")
@@ -166,13 +188,8 @@ class OpticalModuleFaultPredictor:
         self.y = df[self.target_column].astype(int)
         self.X = df.drop(columns=[self.target_column])
 
-        other_targets = [
-            "target_tx_fault_event_7d",
-            "target_fec_burst_7d",
-            "target_rx_los_event_7d",
-            "target_rx_lol_event_7d",
-        ]
-        for col in other_targets:
+        all_target_cols = self._get_all_target_columns()
+        for col in all_target_cols:
             if col in self.X.columns and col != self.target_column:
                 self.X = self.X.drop(columns=[col])
 
@@ -325,7 +342,10 @@ class OpticalModuleFaultPredictor:
         precision = precision_score(self.y_test, y_pred, zero_division=0)
         recall = recall_score(self.y_test, y_pred, zero_division=0)
         f1 = f1_score(self.y_test, y_pred, zero_division=0)
-        roc_auc = roc_auc_score(self.y_test, y_pred_proba)
+        try:
+            roc_auc = roc_auc_score(self.y_test, y_pred_proba)
+        except ValueError:
+            roc_auc = float("nan")
 
         print("Classification Report:")
         print(classification_report(self.y_test, y_pred, zero_division=0))
@@ -339,8 +359,11 @@ class OpticalModuleFaultPredictor:
 
         cm = confusion_matrix(self.y_test, y_pred)
         print(f"\nConfusion Matrix:")
-        print(f"[[TN={cm[0, 0]}  FP={cm[0, 1]}]")
-        print(f" [FN={cm[1, 0]}  TP={cm[1, 1]}]]")
+        if cm.shape == (2, 2):
+            print(f"[[TN={cm[0, 0]}  FP={cm[0, 1]}]")
+            print(f" [FN={cm[1, 0]}  TP={cm[1, 1]}]]")
+        else:
+            print(f"[[TN={cm[0, 0]}]] (单类别: 全为负样本)")
 
         self.feature_importance = pd.DataFrame(
             {
@@ -464,7 +487,9 @@ class OpticalModuleFaultPredictor:
             "model_name": model_name,
             "created_date": datetime.now().isoformat(),
             "data_shape": list(self.data.shape),
+            "fault_type": self.fault_type,
             "target_column": self.target_column,
+            "predict_window_days": self.predict_window_days,
             "features_count": len(self.feature_names),
             "model_type": "XGBoost",
             "parameters": self.model.get_params(),
@@ -487,6 +512,9 @@ class OpticalModuleFaultPredictor:
         print("=" * 60)
         print("OPTICAL MODULE FAULT PREDICTION PIPELINE")
         print("=" * 60)
+        print(f"Fault type: {self.fault_type}")
+        print(f"Target column: {self.target_column}")
+        print(f"Predict window: {self.predict_window_days} days")
 
         self.load_data()
         self.preprocess_data()
@@ -522,9 +550,8 @@ def main():
     parser.add_argument(
         "--target",
         type=str,
-        default="rx_los",
-        choices=["rx_los", "tx_fault", "rx_lol", "fec_burst"],
-        help="Target fault type to predict",
+        default=None,
+        help="Target fault type to predict (from rules.yaml)",
     )
     parser.add_argument(
         "--hyperparams",
@@ -536,23 +563,42 @@ def main():
         "--rules",
         type=str,
         default="config/rules.yaml",
-        help="Path to rules config for validation",
+        help="Path to rules config",
+    )
+    parser.add_argument(
+        "--info",
+        type=str,
+        default="config/info.yaml",
+        help="Path to info config",
     )
     args = parser.parse_args()
 
     available_targets = get_available_targets(args.rules)
-    print(f"Available targets from rules.yaml: {available_targets}")
+    print(f"Available fault types from rules.yaml: {available_targets}")
+
+    if args.target is None:
+        if available_targets:
+            args.target = available_targets[0]
+            print(f"No target specified, using first available: {args.target}")
+        else:
+            print("Error: No fault types found in rules.yaml and no target specified")
+            return
 
     if args.target not in available_targets:
-        print(f"Warning: Target '{args.target}' not found in rules.yaml")
+        print(f"Warning: Fault type '{args.target}' not found in rules.yaml")
+        print(f"Available fault types: {available_targets}")
         print(f"Using '{args.target}' anyway...")
 
-    target_column = TARGET_MAPPING.get(args.target, f"target_{args.target}_event_7d")
-    print(f"Predicting fault type: {args.target} -> {target_column}")
+    predict_window_days = get_predict_window_days(args.info)
+    target_column = get_target_column_name(args.target, predict_window_days)
+    print(f"Predicting fault type: {args.target}")
+    print(f"Target column: {target_column}")
+    print(f"Predict window: {predict_window_days} days")
 
     predictor = OpticalModuleFaultPredictor(
         data_path=args.data,
-        target_column=target_column,
+        fault_type=args.target,
+        predict_window_days=predict_window_days,
         hyperparams_path=args.hyperparams,
     )
 
