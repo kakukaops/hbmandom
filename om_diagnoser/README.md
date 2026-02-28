@@ -80,7 +80,7 @@ om_diagnoser/
 ./run_pipeline.sh data/your_data.csv tx_fault
 ```
 
-支持的预测目标（需在 `config/rules.yaml` 中定义）：
+支持用户在 `config/rules.yaml` 中自定义预测目标，样例中定义的目标如下：
 - `rx_los` - 接收端信号丢失
 - `tx_fault` - 发送端故障
 - `rx_lol` - 接收端失锁
