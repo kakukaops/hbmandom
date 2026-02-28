@@ -190,7 +190,7 @@ python om_fault_predictor.py --data data/features.csv --target rx_los --hyperpar
 
 #### 批量预测：
 ```bash
-python predict_faults.py --batch data/new_data.csv --output predictions/results.csv
+python predict_faults.py --target rx_los --batch data/new_data.csv --output predictions/results.csv
 ```
 
 #### 单样本预测（Python代码）：
@@ -214,7 +214,7 @@ print(f"预测结果: {result}")
 
 #### 运行示例：
 ```bash
-python predict_faults.py --example
+python predict_faults.py --target rx_los --example
 ```
 
 ## 示例数据
