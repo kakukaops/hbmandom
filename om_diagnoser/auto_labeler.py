@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import os
+import json
+import argparse
 import pandas as pd
 import numpy as np
 import yaml
@@ -11,6 +13,7 @@ from datetime import datetime
 
 class AutoLabeler:
     def __init__(self, config_path: str = "config/rules.yaml"):
+        """初始化自动标注器并加载规则配置。"""
         self.config_path = config_path
         self.config = None
         self.rules = []
@@ -32,6 +35,7 @@ class AutoLabeler:
         self.load_config()
     
     def load_config(self) -> None:
+        """读取规则配置并构建运算符映射。"""
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 self.config = yaml.safe_load(f)
@@ -66,6 +70,7 @@ class AutoLabeler:
             raise
     
     def _create_operator_func(self, operator: str):
+        """根据运算符字符串返回可执行比较函数。"""
         if operator == "==":
             return lambda x, y: x == y
         elif operator == "!=":
@@ -82,15 +87,18 @@ class AutoLabeler:
             raise ValueError(f"不支持的运算符: {operator}")
     
     def _evaluate_condition(self, row: pd.Series, condition: Dict[str, Any]) -> bool:
+        """评估单个条件在当前行上是否成立。"""
         column = condition['column']
         operator = condition['operator']
         value = condition['value']
         
         if column not in row:
+            # 缺列直接判定条件不成立，避免 KeyError 中断整批标注。
             self.logger.warning(f"列 '{column}' 不存在于数据中")
             return False
         
         if operator not in self.supported_operators:
+            # 非法运算符不抛异常，记录后按不匹配处理。
             self.logger.warning(f"不支持的运算符: {operator}")
             return False
         
@@ -101,6 +109,7 @@ class AutoLabeler:
             return False
     
     def _evaluate_rule(self, row: pd.Series, rule: Dict[str, Any]) -> bool:
+        """评估整条规则（多条件 AND）。"""
         if 'conditions' not in rule:
             self.logger.warning(f"规则 '{rule.get('name', '未知')}' 没有条件")
             return False
@@ -115,6 +124,7 @@ class AutoLabeler:
         return True
     
     def label_data(self, data: pd.DataFrame) -> pd.DataFrame:
+        """按规则逐条打标并返回新数据集。"""
         if data.empty:
             self.logger.warning("输入数据为空")
             return data
@@ -142,6 +152,7 @@ class AutoLabeler:
             # 应用规则
             for idx, row in labeled_data.iterrows():
                 if self._evaluate_rule(row, rule):
+                    # 命中规则后覆盖写入标签值。
                     labeled_data.at[idx, label_column] = label_value
                     rule_stats[rule_name] += 1
         
@@ -156,6 +167,7 @@ class AutoLabeler:
         return labeled_data
     
     def load_data(self, input_path: Optional[str] = None) -> pd.DataFrame:
+        """读取待标注数据，路径可由参数或配置文件提供。"""
         if input_path is None:
             if not self.config or 'files' not in self.config or 'input_path' not in self.config['files']:
                 raise ValueError("配置文件中未指定输入文件路径")
@@ -175,6 +187,7 @@ class AutoLabeler:
             raise
     
     def save_data(self, data: pd.DataFrame, output_path: Optional[str] = None) -> None:
+        """保存标注结果到 CSV。"""
         if output_path is None:
             if not self.config or 'files' not in self.config or 'output_path' not in self.config['files']:
                 raise ValueError("配置文件中未指定输出文件路径")
@@ -192,6 +205,7 @@ class AutoLabeler:
             raise
     
     def run(self, input_path: Optional[str] = None, output_path: Optional[str] = None) -> pd.DataFrame:
+        """执行自动标注主流程。"""
         self.logger.info("开始自动标注流程...")
         
         # 加载数据
@@ -207,48 +221,82 @@ class AutoLabeler:
         return labeled_data
 
 
-if __name__ == '__main__':
-    print("开始测试自动标注器...")
-    
+def save_label_stats(labeled_data: pd.DataFrame, stats_path: str) -> None:
+    """保存标注统计信息到 JSON 文件。"""
+    label_columns = ["rx_los", "tx_fault", "rx_lol", "fec_burst"]
+    stats = {
+        "total_records": len(labeled_data),
+        "label_counts": {
+            col: int((labeled_data[col] == 1).sum())
+            for col in label_columns
+            if col in labeled_data.columns
+        },
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    output_dir = os.path.dirname(stats_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    with open(stats_path, "w", encoding="utf-8") as f:
+        json.dump(stats, f, indent=2, ensure_ascii=False)
+
+
+def main():
+    """命令行入口：执行标注并可选输出统计信息。"""
+    parser = argparse.ArgumentParser(description="自动标注脚本")
+    parser.add_argument(
+        "--config", type=str, default="config/rules.yaml", help="规则配置文件路径"
+    )
+    parser.add_argument("--input_path", type=str, help="待标注输入 CSV 路径")
+    parser.add_argument("--output_path", type=str, help="标注输出 CSV 路径")
+    parser.add_argument(
+        "--stats_path",
+        type=str,
+        default="data/labeling_stats.json",
+        help="统计信息输出路径",
+    )
+    parser.add_argument(
+        "--skip_stats", action="store_true", help="跳过统计信息保存"
+    )
+    parser.add_argument(
+        "--head",
+        type=int,
+        default=5,
+        help="打印前 N 行标注结果（默认 5）",
+    )
+    args = parser.parse_args()
+
+    print("开始运行自动标注器...")
     try:
-        # 创建自动标注器实例
-        labeler = AutoLabeler("config/rules.yaml")
-        
-        # 运行自动标注
-        labeled_data = labeler.run()
-        
-        # 显示一些统计信息
+        labeler = AutoLabeler(args.config)
+        labeled_data = labeler.run(
+            input_path=args.input_path, output_path=args.output_path
+        )
+
         print("\n标注结果统计:")
         print(f"总记录数: {len(labeled_data)}")
-        
-        # 检查标注列
-        label_columns = ['rx_los', 'tx_fault', 'rx_lol', 'fec_burst']
-        for col in label_columns:
+        for col in ["rx_los", "tx_fault", "rx_lol", "fec_burst"]:
             if col in labeled_data.columns:
-                count = (labeled_data[col] == 1).sum()
+                count = int((labeled_data[col] == 1).sum())
                 print(f"{col} = 1 的记录数: {count}")
-        
-        # 显示前几行数据
-        print("\n标注后的前5行数据:")
-        print(labeled_data.head())
-        
-        # 保存统计信息
-        stats = {
-            'total_records': len(labeled_data),
-            'label_counts': {col: int((labeled_data[col] == 1).sum()) 
-                           for col in label_columns if col in labeled_data.columns},
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        stats_path = "data/labeling_stats.json"
-        import json
-        with open(stats_path, 'w', encoding='utf-8') as f:
-            json.dump(stats, f, indent=2, ensure_ascii=False)
-        print(f"\n统计信息已保存到: {stats_path}")
-        
-        print("\n测试完成!")
-        
+
+        if args.head > 0:
+            print(f"\n标注后的前{args.head}行数据:")
+            print(labeled_data.head(args.head))
+
+        if not args.skip_stats:
+            save_label_stats(labeled_data, args.stats_path)
+            print(f"\n统计信息已保存到: {args.stats_path}")
+
+        print("\n自动标注完成!")
     except Exception as e:
-        print(f"测试过程中发生错误: {e}")
+        print(f"自动标注过程中发生错误: {e}")
         import traceback
+
         traceback.print_exc()
+        raise
+
+
+if __name__ == "__main__":
+    main()

@@ -6,6 +6,7 @@
 
 - **Python**: >= 3.8
 - **依赖包**: 见 `requirements.txt`
+- **命令说明**: 文档示例使用 `python`；若你的环境只有 `python3`，请将命令中的 `python` 替换为 `python3`
 
 ```bash
 # 安装依赖
@@ -24,7 +25,6 @@ om_diagnoser/
 ├── auto_labeler.py                 # 自动特征标注
 ├── om_fault_predictor.py           # XGBoost故障预测模型训练
 ├── predict_faults.py               # 故障预测脚本
-├── simulator_config.py             # 仿真器预设配置
 ├── run_pipeline.sh                 # 一键运行脚本
 ├── requirements.txt                # Python依赖包
 ├── README.md                       # 项目说明文档
@@ -34,36 +34,27 @@ om_diagnoser/
 │   ├── rules.yaml                  # 标注规则配置
 │   └── hyper_parameters.yaml       # XGBoost超参数配置
 │
-├── data/                           # 数据目录
+├── data/                           # 数据目录（运行后生成）
 │   ├── simulated_optical_module_data.csv      # 原始仿真数据
-│   ├── labeled_optical_module_data.csv        # 标注后的特征数据
+│   ├── labeled_optical_module_data.csv        # 标注后的时序数据
 │   ├── labeling_stats.json                    # 标注信息元数据
 │   └── optical_module_training_features.csv   # 特征工程后的训练数据
 │
-├── example_data/                   # 示例数据目录
-│   ├── features_sample.csv         # 特征数据样本
-│   ├── prediction_sample.csv       # 预测结果样本
-│   └── models/                     # 示例模型
-│       └── om_fault_predictor.pkl  # 预训练模型
+├── models/                         # 模型文件目录（运行后生成，按故障类型区分）
+│   ├── om_fault_predictor_rx_los.pkl
+│   ├── om_fault_predictor_rx_los_scaler.pkl
+│   ├── om_fault_predictor_rx_los_encoders.pkl
+│   ├── om_fault_predictor_rx_los_features.json
+│   └── om_fault_predictor_rx_los_metadata.json
 │
-├── metadata/                       # 元数据目录
-│   └── optical_module_metadata.json           # 光模块元数据
-│
-├── models/                         # 模型文件目录
-│   ├── om_fault_predictor.pkl              # 训练好的XGBoost模型
-│   ├── om_fault_predictor_scaler.pkl       # 特征标准化器
-│   ├── om_fault_predictor_encoders.pkl     # 分类变量编码器
-│   ├── om_fault_predictor_features.json    # 特征名称
-│   └── om_fault_predictor_metadata.json    # 模型元数据
-│
-├── reports/                        # 评估报告
+├── reports/                        # 评估报告（运行后生成）
 │   └── model_evaluation_report.json        # 模型评估结果
 │
-├── plots/                          # 可视化图表
+├── plots/                          # 可视化图表（运行后生成）
 │   └── model_evaluation.png                # 模型评估图表
 │
-└── predictions/                    # 预测结果
-    └── test_predictions.csv                # 测试预测结果
+└── predictions/                    # 预测结果（运行后生成）
+    └── fault_predictions.csv              # 默认预测输出
 ```
 
 ## 快速开始
@@ -73,12 +64,14 @@ om_diagnoser/
 使用示例数据一键运行完整流程（数据标注 → 特征生成 → 模型训练）：
 
 ```bash
-# 使用默认参数（输入：data/simulated_optical_module_data.csv，目标：rx_los）
+# 使用默认参数（输入：data/simulated_optical_module_data.csv；目标自动选择）
 ./run_pipeline.sh
 
 # 指定输入文件和预测目标
 ./run_pipeline.sh data/your_data.csv tx_fault
 ```
+
+说明：`run_pipeline.sh` 会优先使用 `python`，若不存在会自动回退到 `python3`。
 
 支持用户在 `config/rules.yaml` 中自定义预测目标，样例中定义的目标如下：
 - `rx_los` - 接收端信号丢失
@@ -113,7 +106,7 @@ om_diagnoser/
 #### 1.2 生成仿真数据
 
 ```bash
-# 如果还没有现成的监控数据，可以使用如下代码生成仿真数据并抽取特征进行测试，默认存储在data/simulated_optical_mudule_data.csv中
+# 如果还没有现成监控数据，可先生成仿真数据并抽取特征
 python data_preprocessor.py --simulation --period_days 30 --num_modules 10 --fault_ratio 0.2
 
 # 参数说明：
@@ -134,7 +127,7 @@ python data_preprocessor.py --simulation --period_days 30 --num_modules 10 --fau
 生成：
 - `data/simulated_optical_module_data.csv` - 原始时间序列数据
 - `data/optical_module_training_features.csv` - 处理后的特征数据
-- `metadata/optical_module_metadata.json` - 仿真生成的光模块元数据
+- `data/optical_module_metadata.json` - 仿真生成的光模块元数据
 
 #### 1.3 标注数据
 
@@ -175,7 +168,7 @@ python om_fault_predictor.py --data data/features.csv --target rx_los --hyperpar
 | 参数 | 说明 | 默认值 |
 |-----|------|-------|
 | `--data` | 特征数据文件路径 | `data/optical_module_training_features.csv` |
-| `--target` | 预测目标（rx_los/tx_fault/rx_lol/fec_burst） | `rx_los` |
+| `--target` | 预测目标（rx_los/tx_fault/rx_lol/fec_burst） | `rules.yaml` 中解析出的一个可用目标（建议显式指定） |
 | `--hyperparams` | 超参数配置文件路径 | `config/hyper_parameters.yaml` |
 | `--rules` | 标注规则配置文件路径 | `config/rules.yaml` |
 
@@ -217,12 +210,12 @@ print(f"预测结果: {result}")
 python predict_faults.py --target rx_los --example
 ```
 
-## 示例数据
-
-`example_data/` 目录包含示例数据，方便快速测试：
+## 常见输出文件
 
 | 文件 | 说明 |
 |------|------|
-| `features_sample.csv` | 特征数据样本，可直接用于模型预测 |
-| `prediction_sample.csv` | 预测结果样本格式 |
-| `models/om_fault_predictor.pkl` | 预训练模型，可直接加载使用 |
+| `data/labeled_optical_module_data.csv` | 自动标注后的数据 |
+| `data/optical_module_training_features.csv` | 训练特征数据 |
+| `models/om_fault_predictor_<fault_type>.pkl` | 训练后的故障类型模型 |
+| `reports/model_evaluation_report.json` | 评估指标报告 |
+| `predictions/fault_predictions.csv` | 默认批量预测输出 |

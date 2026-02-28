@@ -36,7 +36,7 @@ import json
 
 
 def load_yaml(path: str, default_path: str = None) -> dict:
-    """Load YAML file."""
+    """加载 YAML 配置，优先使用显式路径，失败时回退到默认路径。"""
     if path is None or not os.path.exists(path):
         if default_path and os.path.exists(default_path):
             path = default_path
@@ -47,7 +47,7 @@ def load_yaml(path: str, default_path: str = None) -> dict:
 
 
 def get_available_targets(rules_path: str = "config/rules.yaml") -> list:
-    """Get available target labels from rules.yaml."""
+    """从 rules.yaml 读取可用故障目标列表。"""
     rules = load_yaml(rules_path)
     if rules and "rules" in rules:
         targets = set()
@@ -59,23 +59,23 @@ def get_available_targets(rules_path: str = "config/rules.yaml") -> list:
 
 
 def get_predict_window_days(info_path: str = "config/info.yaml") -> int:
-    """Get predict window days from info.yaml."""
+    """从 info.yaml 读取预测窗口天数。"""
     info = load_yaml(info_path)
     return info.get("predict_window_days", 7)
 
 
 def get_target_column_name(fault_type: str, predict_window_days: int) -> str:
-    """Generate target column name dynamically."""
+    """按规范拼接目标列名。"""
     return f"target_{fault_type}_event_{predict_window_days}d"
 
 
 def load_hyperparameters(config_path: str = "config/hyper_parameters.yaml") -> dict:
-    """Load hyperparameters from config file."""
+    """加载模型超参数配置。"""
     return load_yaml(config_path)
 
 
 class OpticalModuleFaultPredictor:
-    """Optical Module Fault Prediction using XGBoost."""
+    """基于 XGBoost 的光模块故障预测训练器。"""
 
     def __init__(
         self,
@@ -84,7 +84,7 @@ class OpticalModuleFaultPredictor:
         predict_window_days: int = 7,
         hyperparams_path: str = "config/hyper_parameters.yaml",
     ):
-        """Initialize the predictor."""
+        """初始化训练器并准备输出目录。"""
         self.data_path = data_path
         self.fault_type = fault_type
         self.predict_window_days = predict_window_days
@@ -110,7 +110,7 @@ class OpticalModuleFaultPredictor:
         os.makedirs("plots", exist_ok=True)
 
     def _get_all_target_columns(self) -> list:
-        """Get all target columns that match the pattern target_*_event_{predict_window_days}d."""
+        """列出数据中符合目标命名规范的全部 target 列。"""
         if self.data is None:
             return []
         target_cols = []
@@ -122,7 +122,7 @@ class OpticalModuleFaultPredictor:
         return target_cols
 
     def load_data(self):
-        """Load and explore the dataset."""
+        """加载训练数据并打印基本分布信息。"""
         print("Loading data...")
         self.data = pd.read_csv(self.data_path)
 
@@ -139,6 +139,7 @@ class OpticalModuleFaultPredictor:
             if 1 in target_dist.index:
                 print(f"Positive class ratio: {target_dist[1] / len(self.data):.4f}")
         else:
+            # 明确提示目标列缺失，帮助快速定位规则/窗口配置问题。
             print(f"Warning: Target column '{self.target_column}' not found in data")
             available_targets = self._get_all_target_columns()
             print(f"Available target columns: {available_targets}")
@@ -146,7 +147,7 @@ class OpticalModuleFaultPredictor:
         return self.data
 
     def preprocess_data(self):
-        """Preprocess the data for modeling."""
+        """执行训练前数据清洗、编码和特征拆分。"""
         print("\nPreprocessing data...")
 
         df = self.data.copy()
@@ -158,6 +159,7 @@ class OpticalModuleFaultPredictor:
 
             for col in df.columns:
                 if col.startswith("time_since_last_") and col.endswith("_hours"):
+                    # 事件从未发生时填充大值，保留“距离上次事件很久”语义。
                     df[col] = df[col].fillna(10000)
 
         print("Encoding categorical variables...")
@@ -165,6 +167,7 @@ class OpticalModuleFaultPredictor:
 
         for col in categorical_cols:
             if col in df.columns:
+                # 训练阶段保存编码器，供预测阶段对齐类别映射。
                 le = LabelEncoder()
                 df[col] = le.fit_transform(df[col].astype(str))
                 self.label_encoders[col] = le
@@ -176,12 +179,14 @@ class OpticalModuleFaultPredictor:
         if self.target_column not in df.columns:
             raise ValueError(f"Target column '{self.target_column}' not found in data")
 
+        # 目标列与特征列严格分离，避免信息泄漏。
         self.y = df[self.target_column].astype(int)
         self.X = df.drop(columns=[self.target_column])
 
         all_target_cols = self._get_all_target_columns()
         for col in all_target_cols:
             if col in self.X.columns and col != self.target_column:
+                # 只保留当前目标，移除其他 target_* 标签列。
                 self.X = self.X.drop(columns=[col])
 
         self.feature_names = self.X.columns.tolist()
@@ -193,7 +198,7 @@ class OpticalModuleFaultPredictor:
         return self.X, self.y
 
     def split_data(self):
-        """Split data into training and testing sets."""
+        """按配置切分训练集与测试集。"""
         split_config = self.hyperparams.get("data_split", {})
         test_size = split_config.get("test_size", 0.2)
         random_state = split_config.get("random_state", 42)
@@ -216,7 +221,7 @@ class OpticalModuleFaultPredictor:
         return self.X_train, self.X_test, self.y_train, self.y_test
 
     def scale_features(self):
-        """Scale features using StandardScaler."""
+        """使用 StandardScaler 做特征标准化。"""
         print("\nScaling features...")
 
         self.X_train_scaled = self.scaler.fit_transform(self.X_train)
@@ -234,7 +239,7 @@ class OpticalModuleFaultPredictor:
         return self.X_train_scaled, self.X_test_scaled
 
     def select_features(self, k=20):
-        """Select top k features using ANOVA F-value."""
+        """基于 ANOVA F 值选择前 k 个特征。"""
         print(f"\nSelecting top {k} features...")
 
         selector = SelectKBest(
@@ -255,7 +260,7 @@ class OpticalModuleFaultPredictor:
         return X_train_selected, X_test_selected
 
     def train_xgboost(self, use_cv=True):
-        """Train XGBoost model with optional cross-validation."""
+        """训练 XGBoost，可按配置启用交叉验证。"""
         print("\nTraining XGBoost model...")
 
         xgb_config = self.hyperparams.get("xgboost", {})
@@ -273,12 +278,14 @@ class OpticalModuleFaultPredictor:
             "gamma": xgb_config.get("gamma", 0),
             "reg_alpha": xgb_config.get("reg_alpha", 0),
             "reg_lambda": xgb_config.get("reg_lambda", 1),
+            # 类别不平衡时自动提升正类权重，缓解偏置。
             "scale_pos_weight": len(self.y_train[self.y_train == 0])
             / max(1, len(self.y_train[self.y_train == 1])),
             "random_state": xgb_config.get("random_state", 42),
             "n_jobs": xgb_config.get("n_jobs", -1),
         }
 
+        # 若执行了特征筛选则使用筛选结果，否则使用全量特征。
         feature_set = (
             self.selected_features
             if hasattr(self, "selected_features")
@@ -286,6 +293,7 @@ class OpticalModuleFaultPredictor:
         )
 
         if use_cv and cv_config.get("enabled", True):
+            # 交叉验证用于评估泛化稳定性，不改变最终训练样本。
             print("Performing cross-validation...")
             cv_scores = cross_val_score(
                 xgb.XGBClassifier(**params),
@@ -317,7 +325,7 @@ class OpticalModuleFaultPredictor:
         return self.model
 
     def evaluate_model(self):
-        """Evaluate the trained model."""
+        """评估模型性能并输出核心指标。"""
         print("\nEvaluating model...")
 
         feature_set = (
@@ -336,6 +344,7 @@ class OpticalModuleFaultPredictor:
         try:
             roc_auc = roc_auc_score(self.y_test, y_pred_proba)
         except ValueError:
+            # 单类别测试集时 AUC 无法定义，返回 NaN。
             roc_auc = float("nan")
 
         print("Classification Report:")
@@ -354,6 +363,7 @@ class OpticalModuleFaultPredictor:
             print(f"[[TN={cm[0, 0]}  FP={cm[0, 1]}]")
             print(f" [FN={cm[1, 0]}  TP={cm[1, 1]}]]")
         else:
+            # 样本单一时仅输出一个格子，避免索引越界。
             print(f"[[TN={cm[0, 0]}]] (单类别: 全为负样本)")
 
         self.feature_importance = pd.DataFrame(
@@ -377,7 +387,7 @@ class OpticalModuleFaultPredictor:
         }
 
     def plot_results(self):
-        """Create visualization plots."""
+        """生成评估图：ROC、特征重要性、混淆矩阵、概率分布。"""
         print("\nCreating plots...")
 
         feature_set = (
@@ -430,6 +440,7 @@ class OpticalModuleFaultPredictor:
             color="blue",
         )
         if (self.y_test == 1).any():
+            # 仅在存在正样本时绘制正类概率分布。
             plt.hist(
                 y_pred_proba[self.y_test == 1],
                 bins=30,
@@ -449,7 +460,7 @@ class OpticalModuleFaultPredictor:
         print("Plots saved to 'plots/model_evaluation.png'")
 
     def save_model(self):
-        """Save the trained model and related artifacts with fault type suffix."""
+        """按故障类型后缀保存模型及其配套产物。"""
         model_name = f"om_fault_predictor_{self.fault_type}"
         print(f"\nSaving model as '{model_name}'...")
 
@@ -475,6 +486,7 @@ class OpticalModuleFaultPredictor:
                 indent=2,
             )
 
+        # 元数据用于推理端校验模型训练上下文。
         metadata = {
             "model_name": model_name,
             "created_date": datetime.now().isoformat(),
@@ -500,7 +512,7 @@ class OpticalModuleFaultPredictor:
         return model_path
 
     def run_pipeline(self):
-        """Run the complete pipeline."""
+        """执行完整训练流水线。"""
         print("=" * 60)
         print("OPTICAL MODULE FAULT PREDICTION PIPELINE")
         print("=" * 60)
@@ -515,6 +527,7 @@ class OpticalModuleFaultPredictor:
 
         fs_config = self.hyperparams.get("feature_selection", {})
         if fs_config.get("enabled", False):
+            # 按配置开关控制特征筛选步骤。
             self.select_features(k=fs_config.get("k", 20))
 
         cv_enabled = self.hyperparams.get("cross_validation", {}).get("enabled", True)
@@ -532,6 +545,7 @@ class OpticalModuleFaultPredictor:
 
 
 def main():
+    """命令行入口：读取参数并触发训练流水线。"""
     parser = argparse.ArgumentParser(description="Optical Module Fault Predictor")
     parser.add_argument(
         "--data",
@@ -570,6 +584,7 @@ def main():
 
     if args.target is None:
         if available_targets:
+            # 未指定目标时默认使用规则文件中的第一个目标。
             args.target = available_targets[0]
             print(f"No target specified, using first available: {args.target}")
         else:
@@ -577,6 +592,7 @@ def main():
             return
 
     if args.target not in available_targets:
+        # 允许继续执行，便于兼容临时实验目标。
         print(f"Warning: Fault type '{args.target}' not found in rules.yaml")
         print(f"Available fault types: {available_targets}")
         print(f"Using '{args.target}' anyway...")

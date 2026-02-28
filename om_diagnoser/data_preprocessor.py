@@ -15,10 +15,12 @@ from simulator import OpticalModuleSimulator
 
 class OpticalModuleLogPreprocessor:
     """
-    Optical Module Log Preprocessor
+    光模块日志预处理器。
 
-    This class preprocesses optical module log data for fault prediction.
-    It supports both simulated data generation and real data processing.
+    负责将原始监控日志转换为可训练特征，支持：
+    - 仿真数据生成 + 特征提取
+    - 真实数据输入 + 特征提取
+    - 根据 rules.yaml 动态生成多故障目标列
     """
 
     def __init__(
@@ -33,7 +35,7 @@ class OpticalModuleLogPreprocessor:
         rules_path: Optional[str] = None,
     ):
         """
-        Initialize the preprocessor.
+        初始化预处理器参数和配置。
 
         Args:
             period_days: Total simulation period in days
@@ -81,7 +83,7 @@ class OpticalModuleLogPreprocessor:
         self.metadata = {}
 
     def _load_yaml(self, path: Optional[str], default_path: str) -> Dict:
-        """Load configuration from YAML file."""
+        """读取 YAML 配置，若不存在则返回空字典。"""
         if path is None:
             path = os.path.join(os.path.dirname(__file__), default_path)
 
@@ -93,7 +95,7 @@ class OpticalModuleLogPreprocessor:
             return {}
 
     def _get_fault_types(self) -> Set[str]:
-        """Extract fault types (label_column) from rules.yaml."""
+        """从 rules.yaml 中提取故障类型（label_column）。"""
         fault_types = set()
         if self.rules and "rules" in self.rules:
             for rule in self.rules["rules"]:
@@ -102,11 +104,11 @@ class OpticalModuleLogPreprocessor:
         return fault_types
 
     def _get_target_column_name(self, fault_type: str) -> str:
-        """Generate target column name dynamically based on fault type and predict window."""
+        """根据故障类型和预测窗口动态拼接目标列名。"""
         return f"target_{fault_type}_event_{self.predict_window_days}d"
 
     def generate_features(self, raw_data: pd.DataFrame) -> pd.DataFrame:
-        """Generate features for machine learning from raw data."""
+        """从原始时间序列生成训练特征。"""
 
         features_list = []
 
@@ -114,6 +116,7 @@ class OpticalModuleLogPreprocessor:
             df = group.copy()
             df = df.sort_values("timestamp")
 
+            # 以 24h 作为统计窗口，以配置天数作为前向预测窗口。
             window_size = int(24 * 60 / self.interval_minutes)
             predict_window = int(
                 self.predict_window_days * 24 * 60 / self.interval_minutes
@@ -139,6 +142,7 @@ class OpticalModuleLogPreprocessor:
 
             for metric in metrics:
                 if metric in df.columns:
+                    # 统一生成均值/方差/趋势/最小值四类局部特征。
                     features[f"local_{metric}_mean_24h"] = (
                         df[metric].rolling(window=window_size).mean()
                     )
@@ -163,8 +167,10 @@ class OpticalModuleLogPreprocessor:
             for fault_type in self.fault_types:
                 if fault_type in df.columns:
                     target_col = self._get_target_column_name(fault_type)
+                    # 目标定义为“未来窗口内是否发生事件”。
                     features[target_col] = df[fault_type].rolling(window=indexer).max()
                     if fault_type == "fec_burst":
+                        # fec_burst 由 FEC 计数阈值派生，不直接依赖原标签。
                         features[target_col] = (
                             df["fec_correctable"].rolling(window=indexer).max() > 1000
                         ).astype(int)
@@ -182,9 +188,11 @@ class OpticalModuleLogPreprocessor:
             valid_end = len(features) - predict_window
 
             if valid_end > valid_start:
+                # 去掉头尾无效区间（历史窗口不足/未来窗口不完整）。
                 features_clean = features.iloc[valid_start:valid_end]
 
                 if len(features_clean) > 100:
+                    # 对超长序列做抽样，平衡体量与训练效率。
                     features_clean = features_clean.iloc[::4]
 
                 features_list.append(features_clean)
@@ -197,7 +205,7 @@ class OpticalModuleLogPreprocessor:
     def _calculate_time_since_event(
         self, df: pd.DataFrame, event_col: str
     ) -> pd.Series:
-        """Calculate hours since last event occurrence."""
+        """计算距离上一次事件触发的小时数。"""
         time_since = pd.Series(index=df.index, dtype=float)
         last_event_idx = -1
 
@@ -209,12 +217,13 @@ class OpticalModuleLogPreprocessor:
                 hours_since = (i - last_event_idx) * self.interval_minutes / 60
                 time_since.iloc[i] = hours_since
             else:
+                # 未发生过事件时保留 NaN，交给后续模型预处理填充。
                 time_since.iloc[i] = np.nan
 
         return time_since
 
     def run_preprocessing(self) -> Dict:
-        """Run the complete preprocessing and return results."""
+        """执行完整预处理流程并返回结果字典。"""
 
         print(f"Starting optical module log preprocessing...")
         print(
@@ -223,6 +232,7 @@ class OpticalModuleLogPreprocessor:
         print(f"Fault types: {self.fault_types}")
 
         if self.with_simulation:
+            # 仿真模式：先生成原始数据，再抽取特征。
             simulator = OpticalModuleSimulator(
                 period_days=self.period_days,
                 interval_minutes=self.interval_minutes,
@@ -237,6 +247,7 @@ class OpticalModuleLogPreprocessor:
             )
             raw_df, all_metadata = simulator.run_simulation()
         else:
+            # 非仿真模式：直接读取用户输入数据并提取特征。
             if self.input_file is None:
                 raise ValueError("input_file is required when with_simulation=False")
             raw_df = pd.read_csv(self.input_file, parse_dates=["timestamp"])
@@ -258,7 +269,7 @@ class OpticalModuleLogPreprocessor:
         }
 
     def _print_summary(self):
-        """Print summary of preprocessing results."""
+        """打印预处理结果摘要。"""
         print("\n" + "=" * 50)
         print("PREPROCESSING SUMMARY")
         print("=" * 50)
@@ -273,6 +284,7 @@ class OpticalModuleLogPreprocessor:
             and hasattr(self.raw_data, "columns")
             and "scenario" in self.raw_data.columns
         ):
+            # 仅仿真数据具备 scenario 字段，真实数据不做该统计。
             scenario_counts = self.raw_data["scenario"].value_counts()
             print("\nFault scenario distribution:")
             for scenario, count in scenario_counts.items():
@@ -293,6 +305,7 @@ class OpticalModuleLogPreprocessor:
         feature_output_path: str = "optical_module_features.csv",
         metadata_output_path: str = "optical_module_metadata.json",
     ):
+        """导出原始数据、特征和元数据到目标目录。"""
         for data_dir in ["data", "metadata"]:
             if not os.path.exists(data_dir):
                 os.makedirs(data_dir)
@@ -319,6 +332,7 @@ class OpticalModuleLogPreprocessor:
                     "metadata" in metadata_serializable[sn]
                     and "installation_date" in metadata_serializable[sn]["metadata"]
                 ):
+                    # datetime 先转成字符串，避免 JSON 序列化失败。
                     metadata_serializable[sn]["metadata"]["installation_date"] = (
                         metadata_serializable[sn]["metadata"][
                             "installation_date"
@@ -331,6 +345,7 @@ class OpticalModuleLogPreprocessor:
 
 
 def main():
+    """命令行入口：参数解析 -> 预处理 -> 导出结果。"""
     parser = argparse.ArgumentParser(description="Optical Module Log Preprocessor")
     parser.add_argument(
         "--period_days", type=int, default=60, help="Total simulation period in days"
@@ -378,6 +393,7 @@ def main():
     parser.add_argument("--rules", type=str, help="Path to rules.yaml config file")
     args = parser.parse_args()
 
+    # simulation=False 时才需要从 --input_file 读取外部 CSV。
     preprocessor = OpticalModuleLogPreprocessor(
         period_days=args.period_days,
         fault_ratio=args.fault_ratio,

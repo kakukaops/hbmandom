@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore")
 
 
 def get_available_targets(rules_path: str = "config/rules.yaml") -> list:
-    """Get available target labels from rules.yaml."""
+    """从规则文件读取可用故障目标列表。"""
     if os.path.exists(rules_path):
         with open(rules_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
@@ -28,10 +28,10 @@ def get_available_targets(rules_path: str = "config/rules.yaml") -> list:
 
 
 class FaultPredictor:
-    """Load trained model and make predictions."""
+    """加载训练产物并执行故障预测。"""
 
     def __init__(self, fault_type: str = "rx_los"):
-        """Initialize the predictor with saved model artifacts.
+        """初始化预测器并加载对应故障类型模型。
 
         Args:
             fault_type: The fault type to predict (e.g., 'rx_los', 'tx_fault')
@@ -48,7 +48,7 @@ class FaultPredictor:
         self.load_model()
 
     def load_model(self):
-        """Load the trained model and related artifacts."""
+        """加载模型、标准化器、编码器和元数据。"""
         print(f"Loading model for fault type '{self.fault_type}'...")
 
         try:
@@ -76,13 +76,14 @@ class FaultPredictor:
             print(f"Model loaded successfully. Features: {len(self.feature_names)}")
 
         except FileNotFoundError as e:
+            # 统一提示训练命令，避免用户手动定位缺失文件。
             print(f"Error loading model: {e}")
             print(f"Please train the model for fault type '{self.fault_type}' first.")
             print(f"Run: python om_fault_predictor.py --target {self.fault_type}")
             raise
 
     def preprocess_new_data(self, new_data):
-        """Preprocess new data in the same way as training data."""
+        """按训练阶段同样的规则预处理推理数据。"""
         print("Preprocessing new data...")
 
         df = new_data.copy()
@@ -92,6 +93,7 @@ class FaultPredictor:
             print(f"Columns with missing values: {missing_cols}")
             for col in df.columns:
                 if col.startswith("time_since_last_") and col.endswith("_hours"):
+                    # 与训练阶段保持一致：缺失时间间隔特征填充为大值。
                     df[col] = df[col].fillna(10000)
 
         categorical_cols = ["vendor", "model", "device_id"]
@@ -102,6 +104,7 @@ class FaultPredictor:
                 df[col] = df[col].astype(str)
                 unseen_mask = ~df[col].isin(le.classes_)
                 if unseen_mask.any():
+                    # 未见类别降级到已知类别，避免 transform 报错。
                     print(
                         f"  Warning: {unseen_mask.sum()} unseen categories in '{col}', mapping to most frequent"
                     )
@@ -113,6 +116,7 @@ class FaultPredictor:
         if missing_features:
             print(f"Warning: Missing features: {missing_features}")
             for feature in missing_features:
+                # 缺失特征补零，保证特征维度与模型输入一致。
                 df[feature] = 0
 
         df = df[self.feature_names]
@@ -124,7 +128,7 @@ class FaultPredictor:
         return df_scaled
 
     def predict(self, new_data, threshold=0.5):
-        """Make predictions on new data."""
+        """执行批量预测并返回结果表。"""
         print(
             f"\nMaking predictions for '{self.fault_type}' with threshold={threshold}..."
         )
@@ -132,6 +136,7 @@ class FaultPredictor:
         X_processed = self.preprocess_new_data(new_data)
 
         y_pred_proba = self.model.predict_proba(X_processed)[:, 1]
+        # 概率按阈值转换为二分类结果。
         y_pred = (y_pred_proba >= threshold).astype(int)
 
         results = pd.DataFrame(
@@ -146,6 +151,7 @@ class FaultPredictor:
         original_cols = [
             col for col in new_data.columns if col not in self.feature_names
         ]
+        # 保留非模型特征字段，方便结果回查原始样本。
         for col in original_cols:
             results[col] = new_data[col].values
 
@@ -157,7 +163,7 @@ class FaultPredictor:
         return results
 
     def _get_risk_level(self, probabilities):
-        """Convert probabilities to risk levels."""
+        """将故障概率分桶为风险等级。"""
         risk_levels = []
         for prob in probabilities:
             if prob < 0.3:
@@ -169,7 +175,7 @@ class FaultPredictor:
         return risk_levels
 
     def predict_single(self, features_dict):
-        """Make prediction for a single sample."""
+        """对单条样本执行预测。"""
         print(f"Making single prediction for '{self.fault_type}'...")
 
         df = pd.DataFrame([features_dict])
@@ -184,7 +190,7 @@ class FaultPredictor:
         }
 
     def evaluate_predictions(self, predictions, true_labels):
-        """Evaluate predictions against true labels."""
+        """对预测结果与真值进行评估。"""
         from sklearn.metrics import (
             accuracy_score,
             precision_score,
@@ -205,6 +211,7 @@ class FaultPredictor:
         try:
             roc_auc = roc_auc_score(true_labels, predictions["probability"])
         except ValueError:
+            # 真值单类别时 AUC 不可计算。
             roc_auc = float("nan")
 
         print(f"Accuracy:  {accuracy:.4f}")
@@ -219,6 +226,7 @@ class FaultPredictor:
             print(f"[[TN={cm[0, 0]}  FP={cm[0, 1]}]")
             print(f" [FN={cm[1, 0]}  TP={cm[1, 1]}]]")
         else:
+            # 单类别数据时只输出单格混淆矩阵。
             print(f"[[TN={cm[0, 0]}]] (单类别: 全为负样本)")
 
         return {
@@ -233,7 +241,7 @@ class FaultPredictor:
     def save_predictions(
         self, predictions, output_path="predictions/fault_predictions.csv"
     ):
-        """Save predictions to CSV file."""
+        """保存预测结果到 CSV。"""
         os.makedirs("predictions", exist_ok=True)
 
         predictions.to_csv(output_path, index=False)
@@ -242,7 +250,7 @@ class FaultPredictor:
 
 
 def example_usage(fault_type: str = "rx_los"):
-    """Example of how to use the predictor."""
+    """演示预测器的两种典型用法。"""
     print("=" * 60)
     print("EXAMPLE USAGE")
     print("=" * 60)
@@ -253,6 +261,7 @@ def example_usage(fault_type: str = "rx_los"):
     try:
         new_data = pd.read_csv("data/optical_module_training_features.csv").head(100)
 
+        # 示例中删除目标列，模拟真实线上推理输入。
         target_cols = [col for col in new_data.columns if col.startswith("target_")]
         new_data = new_data.drop(columns=target_cols)
 
@@ -313,7 +322,7 @@ def batch_prediction(
     fault_type: str = "rx_los",
     output_csv="predictions/fault_predictions.csv",
 ):
-    """Run batch prediction on a CSV file."""
+    """读取 CSV 并执行批量预测。"""
     print(f"Running batch prediction for '{fault_type}' on {input_csv}...")
 
     predictor = FaultPredictor(fault_type=fault_type)
@@ -335,6 +344,7 @@ def batch_prediction(
 
 
 if __name__ == "__main__":
+    # CLI 分支：示例模式 / 批量预测模式。
     parser = argparse.ArgumentParser(description="Optical Module Fault Prediction")
     parser.add_argument("--example", action="store_true", help="Run example usage")
     parser.add_argument("--batch", type=str, help="Run batch prediction on CSV file")
@@ -363,6 +373,7 @@ if __name__ == "__main__":
 
     if args.target is None:
         if available_targets:
+            # 默认选择规则文件中的第一个目标，减少必填参数。
             args.target = available_targets[0]
             print(f"No target specified, using first available: {args.target}")
             print(f"Available fault types: {available_targets}")
@@ -371,6 +382,7 @@ if __name__ == "__main__":
             print(f"No fault types found in rules.yaml, using default: {args.target}")
 
     if args.target not in available_targets and available_targets:
+        # 允许继续执行，便于临时模型验证。
         print(
             f"Warning: '{args.target}' not in available fault types: {available_targets}"
         )
